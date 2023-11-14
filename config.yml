@@ -1,0 +1,2 @@
+minio_client_endpoint: minio-api-svc.disn-wildlife.svc.cluster.local
+minio_endpoint_url: http://minio-api-svc.disn-wildlife.svc.cluster.local

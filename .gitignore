@@ -1,0 +1,9 @@
+.vscode/
+bloom/
+venv/
+__pycache__
+../DS_Store
+*.yaml
+/deploy_prod
+/data
+get_helm.sh

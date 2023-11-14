@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+.conda/
+.vscode/
+bloom/
+data/
+etl_manifest.yaml
+etl_manifest2.yaml
+manifest.yaml
+README.md

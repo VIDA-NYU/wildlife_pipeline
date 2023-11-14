@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ache
+  namespace: disn-wildlife
+  labels:
+    app: ache
+    source: ache-wildlife
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ache
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: ache
+        io.kompose.network/config-default: 'true'
+      annotations:
+        kompose.cmd: kompose convert -f docker-compose.yml -o kubemanifest.yaml
+        kompose.version: 1.28.0 (HEAD)
+    spec:
+      volumes:
+        - name: ache-claim-small
+          persistentVolumeClaim:
+            claimName: ache-claim-small
+        - name: ache-ubuntu-clone
+          persistentVolumeClaim:
+            claimName: ache-ubuntu-clone
+      containers:
+        - name: ache
+          image: julesbarbosa/work-wildlife:latest
+          args:
+            - startCrawl
+            - '-c'
+            - /data/ubuntu
+            - '-cid' # craw id
+            - crawl-cites-small-june
+            - '-s'
+            - /data/ubuntu/seeds_crawler_june.txt
+            - '-o'
+            - /data
+            - '-e' # ElasticSearch Index
+            - crawl-cites-small-june
+          ports:
+            - name: web
+              containerPort: 8080
+              protocol: TCP
+          resources: {}
+          volumeMounts:
+            - name: ache-claim-small
+              mountPath: /data
+            - name: ache-ubuntu-clone
+              mountPath: /data/ubuntu
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
