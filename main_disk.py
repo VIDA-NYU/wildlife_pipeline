@@ -25,6 +25,8 @@ def main():
     minio_client = MinioClient(access_key, secret_key)
     if bloom_file:
         bloom = BloomFilter(minio_client=minio_client, file_name=bloom_file)
+    else:
+        bloom = None
 
     if temporal:
         print("Starting Temporal ETL Job from Disk")
@@ -35,7 +37,7 @@ def main():
             etl_job = ETLDiskJob(bucket=final_bucket, minio_client=minio_client, path=path, save_image=save_image,
                                  task=task, column=column, model=model, bloom_filter=bloom)
             etl_job.run(folder_name=folder_name, date=date)
-    else: 
+    else:
         print("Starting regular ETL Job from Disk")
         path = f"/data/{filename}/data_pages/"
         folder_name = ""
@@ -56,7 +58,7 @@ def create_arg_parser():
                         help="The Minio bucket to store processed data -- clf or elt")
     parser.add_argument('-model', type=str, required=False, help="Model name on Hugging Face")
     parser.add_argument('-bloom', type=str, required=False, help="The Minio bloom file name")
-    parser.add_argument('-task', type=str, required=True, choices=["text-classification", "zero-shot-classification", "both"],
+    parser.add_argument('-task', type=str, required=False, choices=["text-classification", "zero-shot-classification", "both", "multi-model"],
                         help="Task to perform")
     parser.add_argument('-image', type=bool, required=False, help="Download image - True or False")
     parser.add_argument('-col', type=str, required=False,

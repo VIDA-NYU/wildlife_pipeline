@@ -32,6 +32,10 @@ class MinioClient:
             file_name)
         return obj
 
+    def get_model(self, bucket_name: str, obj_name: str, path: str):
+        self.client.fget_object(bucket_name, obj_name, path)
+
+
     def read_csv(self, bucket: str, file_name: str) -> pd.DataFrame:
         df = pd.read_csv(
             f"s3://{bucket}/{file_name}",

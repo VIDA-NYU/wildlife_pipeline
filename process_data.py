@@ -3,6 +3,8 @@ from typing import Dict, List, Optional
 
 import datamart_geo
 from io import BytesIO
+
+from bs4 import BeautifulSoup
 from mlscraper.html import Page
 import numpy as np
 from numpy import asarray
@@ -13,7 +15,13 @@ from typing import Any
 import re
 import pickle
 import uuid
-from create_matadata import (
+import os
+import shutil
+import tempfile
+
+
+
+from create_metadata import (
     open_scrap,
     get_sintax_opengraph,
     get_sintax_dublincore,
@@ -40,10 +48,15 @@ class ProcessData:
 
     def open_scrap(self, minio_client: Any, domain: str):
         if domain not in self.domains.keys():
-            obj = minio_client.get_obj("scrapers", "scraper_" + domain)
-            scraper = pickle.load(obj)
-            self.domains[domain] = scraper
-            logging.info(f"{domain} MLscraper loaded")
+            if self.minio_client:
+                obj = minio_client.get_obj("scrapers", "scraper_" + domain)
+                scraper = pickle.load(obj)
+                self.domains[domain] = scraper
+                logging.info(f"{domain} MLscraper loaded")
+            elif os.path.exists("scrapers/"):
+                scraper = pickle.load("scrapers/scraper_" + domain)
+                self.domains[domain] = scraper
+                logging.info(f"{domain} MLscraper loaded")
         return self.domains[domain]
 
     @staticmethod
@@ -90,25 +103,29 @@ class ProcessData:
             dict_df = self.create_dictionary_for_dataframe_extraction(ad)
             final_dict.append(dict_df)
             domain = ad["domain"].split(".")[0]
-            try:
-                if domain in constants.DOMAIN_SCRAPERS:
+            if "ebay" in domain:
+                extract_dict = dict_df.copy()
+                self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])
+                final_dict.append(extract_dict)
+            if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
+                try:
                     extract_dict = dict_df.copy()
                     scraper = open_scrap(self.minio_client, domain)
                     extract_dict.update(scraper.get(Page(ad["html"])))
                     if extract_dict.get("product"):
                         extract_dict["name"] = extract_dict.pop("product")
                     final_dict.append(extract_dict)
-            except Exception as e:
-                logging.error(f"MLscraper error: {e}")
+                except Exception as e:
+                    logging.error(f"MLscraper error: {e}")
             try:
                 metadata = None
                 metadata = extruct.extract(ad["html"],
-                                           base_url=ad["url"],
-                                           uniform=True,
-                                           syntaxes=['json-ld',
-                                                     'microdata',
-                                                     'opengraph',
-                                                     'dublincore'])
+                                        base_url=ad["url"],
+                                        uniform=True,
+                                        syntaxes=['json-ld',
+                                                    'microdata',
+                                                    'opengraph',
+                                                    'dublincore'])
             except Exception as e:
                 logging.error(f"Exception on extruct: {e}")
 
@@ -213,8 +230,19 @@ class ProcessData:
             x = ", ".join(x)
         return x
 
-    def send_image(self, df: pd.DataFrame, image_folder: Optional[str], bucket_name: str,
+    def send_image(self, df: pd.DataFrame, image_folder: Optional[str], bucket_name: str, task: Optional[str],
                    timeout_sec: Optional[int] = 30):
+        def send_image_to_minio(row):
+            try:
+                response = requests.get(row["image"], timeout=timeout_sec)
+                img = Image.open(BytesIO(response.content))
+                image_array = asarray(img)
+                image_path = send(image_array, row["id"])
+                image_path = bucket_name + "/" + image_path
+                return image_path
+            except Exception as e:
+                print(f"image error: {e}")
+                return None
         def send(image_array, img_id):
             pil_image = Image.fromarray(image_array)
             # Save the image to an in-memory file
@@ -223,35 +251,61 @@ class ProcessData:
             in_mem_file.seek(0)
             length = len(in_mem_file.read())
             in_mem_file.seek(0)
+
             if image_folder:
                 file_name = f"{image_folder}/{img_id}.png"
             else:
                 file_name = f"{img_id}.png"
-            self.minio_client.store_image(image=in_mem_file, file_name=file_name, length=length,
-                                          bucket_name=bucket_name)
 
-        count = 0
-        negative_df = df[df["label"] == 0]
-        sample_indices = negative_df.sample(int(len(negative_df) * 0.2)).index
-        for idx, row in df.iterrows():
-            if row["image"] and (row["label"] == 1 or idx in sample_indices):
-                try:
-                    response = requests.get(row["image"], timeout=timeout_sec)
-                    img = Image.open(BytesIO(response.content))
-                    image_array = asarray(img)
-                    send(image_array, row["id"])
-                    count += 1
-                except Exception as e:
-                    print(f"image error: {e}")
-                    continue
-        print(f"{count} images indexed on Minio")
+            self.minio_client.store_image(image=in_mem_file, file_name=file_name, length=length, bucket_name=bucket_name)
+            return file_name
+
+        # if task:
+        #     sample_indices_0 = df[df["pred"] == 0].sample(int(len(df[df["pred"] == 0]) * 0.2)).index
+        #     sample_indices_1 = df[df["pred"] == 1].index
+        #     df["sample_image"] = False  # Initialize the column with "false"
+        #     df.loc[sample_indices_0, "sample_image"] = True  # Set "true" for sample indices
+        #     df.loc[sample_indices_1, "sample_image"] = True
+        # else:
+        # df["sample_image"] = True
+
+        df["image_path"] = df.apply(lambda x: send_image_to_minio(x), axis=1)
+
+        # df = df.drop(columns=["sample_image"])
+
+        return df
+
+    @staticmethod
+    def save_image_local(df, image_folder):
+        def save_image(row):
+            try:
+                response = requests.get(row["image"], timeout=30)
+                img = Image.open(BytesIO(response.content))
+                image_path = os.path.join(image_folder, f"{row['id']}.png")
+                img.save(image_path)  # Save the image locally
+                return image_path
+            except Exception as e:
+                print(f"image error: {e}")
+                return None
+        df["image_path"] = df.apply(lambda x: save_image(x), axis=1)
+
+        return df
+
 
     @staticmethod
     def get_location_info(df):
+        def resolve_location(name):
+            if name:
+                parts = name.split(", ")  # Split the location string by comma
+                for part in parts:
+                    result = geo_data.resolve_name(part)  # Remove leading/trailing spaces and resolve each part
+                    if result:
+                        return result
+            return None
         df["location"] = np.where(df["location"] == "None", None, df["location"])
         df["location"] = np.where(df["location"] == "US", "USA", df["location"])
         df["location"] = np.where(df["location"] == "GB", "Great Britain", df["location"])
-        df["loc"] = df["location"].apply(lambda x: geo_data.resolve_name(x) if x else None)
+        df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
         df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
         df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
         df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
@@ -296,7 +350,7 @@ class ProcessData:
                 df[column] = df[column].astype(expected_dtype)
         return df
 
-    def run_classification(self, df: pd.DataFrame) -> pd.DataFrame:
+    def run_classification(self, df: pd.DataFrame, bucket_name: Optional[str]) -> pd.DataFrame:
         logging.info(self.task)
         classifier_job = CLFJob(bucket=self.bucket, final_bucket=self.bucket, minio_client=self.minio_client,
                                 date_folder=None, task=self.task, model=self.model, column=self.column)
@@ -304,6 +358,16 @@ class ProcessData:
             df = classifier_job.get_inference(df)
         elif self.task == "text-classification":
             df = classifier_job.get_inference_for_column(df)
+        elif self.task == "multi-model":
+            if "image_path" not in df.columns:
+                folder_path= "./image_data"
+                os.makedirs(folder_path, exist_ok=True)
+                temp_dir = tempfile.mkdtemp(dir=folder_path)
+                df = ProcessData.save_image_local(df, temp_dir)
+                df = classifier_job.get_inference_for_mmm(df, bucket_name)
+                shutil.rmtree(temp_dir)
+            else:
+                df = classifier_job.get_inference_for_mmm(df, bucket_name)
         elif self.task == "both":
             df = classifier_job.get_inference(df)
             df = classifier_job.get_inference_for_column(df)
@@ -338,3 +402,51 @@ class ProcessData:
     def maybe_fix_text(x):
         # fixes Unicode that’s broken in various ways
         return ftfy.fix_text(x) if isinstance(x, str) else x
+
+    def add_seller_information_to_metadata(self, domain: str, metadata: dict, soup):
+        if 'ebay' in domain:
+            seller_username, location = self.extract_seller_info_for_ebay(soup)
+            metadata["seller"] = seller_username
+            metadata["location"] = location
+
+    @staticmethod
+    def extract_seller_info_for_ebay(soup):
+
+        # Parse the HTML content
+        # soup = BeautifulSoup(page_html, 'html.parser')
+        # Find the div element with the specified class
+        seller_info_div = soup.find('div', class_='ux-seller-section__item--seller')
+
+        if seller_info_div:
+            # Extract the seller's username
+            seller_username = seller_info_div.a.span.get_text(strip=True)
+            # print(f"Seller Username: {seller_username}")
+        else:
+            logging.error("Seller username not found.")
+            seller_username = ""
+
+        shipping_location_element = soup.find('div', {
+            'class': 'ux-labels-values col-12 ux-labels-values--itemLocation'})
+
+        if shipping_location_element:
+            # Extract the shipping location text
+            shipping_location_text = shipping_location_element.get_text()
+            shipping_location = shipping_location_text.split(':')[-1].strip()
+            return seller_username, shipping_location
+        else:
+            logging.error("Shipping location not found.")
+            return seller_username, ""
+
+
+    @staticmethod
+    def get_parser(content_type):
+        if 'text/xml' in content_type:
+            parser = 'xml'
+        elif 'text/html' in content_type:
+            parser = 'html.parser'
+        elif 'x-asp' in content_type or 'xhtml+xml' in content_type:
+            parser = 'lxml'
+        elif 'text/plain' in content_type:
+            parser = 'plain'
+        else:
+            return None

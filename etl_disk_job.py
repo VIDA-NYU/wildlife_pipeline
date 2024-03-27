@@ -15,18 +15,19 @@ from mlscraper.html import Page
 import chardet
 import logging
 import constants
+import pybase64
 
-from create_matadata import (
+
+from create_metadata import (
     get_sintax_opengraph,
     get_sintax_dublincore,
     get_dict_json_ld,
     get_dict_microdata
 )
 
-
 class ETLDiskJob(ProcessData):
-    def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: str, column: str,
-                 model: str, bloom_filter: BloomFilter):
+    def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
+                 model: str, bloom_filter: Optional[BloomFilter]):
         super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, column=column,
                          model=model)
         self.bucket = bucket
@@ -52,7 +53,11 @@ class ETLDiskJob(ProcessData):
                 logging.info(f"Starting processing file {file}")
                 final_filename = file.split(".")[0]
                 final_filename = f"{folder_name}{final_filename}"
-                if not self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet"):
+                if self.minio_client:
+                    checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
+                else:
+                    checked_obj = False
+                if not checked_obj:
                     cached = []
                     processed = []
                     count = 0
@@ -72,29 +77,61 @@ class ETLDiskJob(ProcessData):
                         processed_df = self.extract_information_from_docs(cached)
                         processed.append(processed_df)
                     if len(processed) > 0:
-                        processed_df = self.perform_classification(processed)
-                        self.load_file_to_minio(final_filename, processed_df)
-                        self.save_image_if_applicable(processed_df, date)
+                        processed_df = pd.concat(processed).reset_index(drop=True)
+                        processed_df = processed_df[processed_df["title"].notnull()]
+                        if self.minio_client:
+                            self.load_file_to_minio(final_filename, processed_df)
+                        else:
+                            final_filename = final_filename+".csv"
+                            processed_df.to_csv(final_filename, index=False)
+                        if self.minio_client:
+                            image_bucket = f"images-{date}"
+                        else:
+                            image_bucket = None
+                        df_w_image_path = self.save_image_if_applicable(processed_df, date)
+                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                        if not processed_df.empty:
+                            if self.minio_client:
+                                self.load_file_to_minio(final_filename, processed_df)
+                            else:
+                                processed_df.to_csv(final_filename, index=False)
                 else:
-                    logging.info(f"file {final_filename} already indexed")
+                    df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
+                    if "image_path" not in df.columns:
+                        image_bucket = f"images-{date}"
+                        df_w_image_path = self.save_image_if_applicable(df, date)
+                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                        if not processed_df.empty:
+                            self.load_file_to_minio(final_filename, processed_df)
+                    else:
+                        logging.info(f"file {final_filename} already indexed")
             logging.info("ETL Job run completed")
 
     # Run classification and load data to MinIO
-    def perform_classification(self, processed):
-        processed_df = pd.concat(processed).reset_index(drop=True)
+    def perform_classification(self, processed_df, bucket_name = Optional[str]):
         if self.task:
-            processed_df = self.run_classification(df=processed_df)
+            processed_df = self.run_classification(df=processed_df, bucket_name=bucket_name)
         return processed_df
 
     def save_image_if_applicable(self, processed_df, date):
         if self.save_image:
-            image_bucket = f"images-{date}"
-            self.send_image(processed_df, None, image_bucket)
+            if self.minio_client:
+                image_bucket = f"images-{date}"
+                return self.send_image(processed_df, None, image_bucket, self.task)
+            else:
+                return ETLDiskJob.save_image_local(processed_df, date)
+        return processed_df
 
     def load_file_to_minio(self, file_name, df):
         self.minio_client.save_df_parquet(self.bucket, file_name, df)
         self.bloom_filter.save()
         logging.info("Document successfully indexed on minio")
+
+    def maybe_check_bloom(self, text):
+        if self.bloom_filter:
+            self.bloom_filter.check_bloom_filter(text)
+        else:
+            return False
 
     def create_df(self, ads: list) -> pd.DataFrame:
         final_dict = []
@@ -102,8 +139,10 @@ class ETLDiskJob(ProcessData):
             html_content = ETLDiskJob.get_decoded_html_from_bytes(ad["content"])
             if html_content:
                 content_type = ad["content_type"]
-                text, title = ETLDiskJob.get_text_title(html_content, content_type=content_type)
-                if not ProcessData.remove_text(text) and not self.bloom_filter.check_bloom_filter(text):
+                parser = ProcessData.get_parser(content_type)
+                soup = BeautifulSoup(html_content, parser)
+                text, title = ETLDiskJob.get_text_title(soup=soup)
+                if not ProcessData.remove_text(text) and not self.maybe_check_bloom(text):
                     domain = ETLDiskJob.get_domain(ad["url"])
                     dict_df = {
                         "url": ad["url"],
@@ -126,8 +165,12 @@ class ETLDiskJob(ProcessData):
                     }
                     final_dict.append(dict_df)
                     domain = domain.split(".")[0]
+                    if "ebay" in domain:
+                        extract_dict = dict_df.copy()
+                        self.add_seller_information_to_metadata(domain, extract_dict, soup)
+                        final_dict.append(extract_dict)
                     try:
-                        if domain in constants.DOMAIN_SCRAPERS:
+                        if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
                             extract_dict = dict_df.copy()
                             scraper = self.open_scrap(self.minio_client, domain)
                             extract_dict.update(scraper.get(Page(html_content)))
@@ -217,12 +260,28 @@ class ETLDiskJob(ProcessData):
     @staticmethod
     def get_decoded_html_from_bytes(content):
         try:
-            decoded_bytes = base64.b64decode(content)
-            detection = chardet.detect(decoded_bytes)
-            html_content = decoded_bytes.decode(detection["encoding"])
+            # Attempt decoding with utf-8 encoding
+            decoded_bytes = pybase64.b64decode(content, validate=True)
+            html_content = decoded_bytes.decode('utf-8')
+
+        except UnicodeDecodeError:
+            try:
+                # Attempt decoding with us-ascii encoding
+                html_content = decoded_bytes.decode('ascii')
+                print("us-ascii worked")
+            except UnicodeDecodeError:
+                # If both utf-8 and us-ascii decoding fail, use chardet for detection
+                detection = chardet.detect(decoded_bytes)
+                try:
+                    html_content = decoded_bytes.decode(detection["encoding"])
+                except UnicodeDecodeError as e:
+                    logging.error("Error while decoding HTML from bytes due to " + str(e))
+                    html_content = None
+
         except Exception as e:
             html_content = None
             logging.error("Error while decoding HTML from bytes due to " + str(e))
+
         return html_content
 
     @staticmethod
@@ -238,26 +297,16 @@ class ETLDiskJob(ProcessData):
         return timestamp
 
     @staticmethod
-    def get_text_title(content, content_type):
-        if 'text/xml' in content_type:
-            parser = 'xml'
-        elif 'text/html' in content_type:
-            parser = 'html.parser'
-        elif 'x-asp' in content_type or 'xhtml+xml' in content_type:
-            parser = 'lxml'
-        elif 'text/plain' in content_type:
-            parser = 'plain'
+    def get_text_title(soup):
+        if soup:
+            try:
+                title = soup.title.string if soup.title else None
+                text = soup.get_text()
+            except Exception as e:
+                text = ""
+                title = ""
+                logging.warning(e)
+                logging.warning("Neither title or text")
+            return text, title
         else:
             return None, None
-
-        # Create a BeautifulSoup object using the chosen parser
-        try:
-            soup = BeautifulSoup(content, parser)
-            title = soup.title.string if soup.title else None
-            text = soup.get_text()
-        except Exception as e:
-            text = ""
-            title = ""
-            logging.warning(e)
-            logging.warning("Neither title or text")
-        return text, title

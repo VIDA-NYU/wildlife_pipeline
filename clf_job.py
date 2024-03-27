@@ -3,9 +3,10 @@ import pandas as pd
 import torch
 import numpy as np
 import os
-from transformers import pipeline
+from transformers import pipeline, DistilBertTokenizer
 import logging
 import constants
+from multi_model_inference import MultiModalModel, get_inference_data, run_inference
 
 
 class CLFJob:
@@ -72,6 +73,18 @@ class CLFJob:
         df.loc[not_empty_filter, "score_product"] = scores
         return df
 
+    def get_inference_for_mmm(self, df: pd.DataFrame, bucket_name) -> pd.DataFrame:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        classifier = self.maybe_load_classifier(task="zero-shot-classification")
+        indices = ~df["image_path"].isnull()
+
+        inference_data = get_inference_data(df[indices], self.minio_client, bucket_name)
+        predictions = run_inference(classifier, inference_data, device)
+
+        df.loc[indices, 'predicted_label'] = predictions
+
+        return df
+
     def get_inference_for_column(self, df: pd.DataFrame) -> pd.DataFrame:
         labels_map = {"LABEL_0": 0, "LABEL_1": 1}
         # this case cannot be zero-shot
@@ -97,8 +110,7 @@ class CLFJob:
         return df
 
     def maybe_load_classifier(self, task: Optional[str]):
-        #TODO: create diff load func for task=both  
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")      
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if self.task == "text-classification":
             model = self.model or 'julesbarbosa/wildlife-classification'
             if not self.classifier:
@@ -106,7 +118,7 @@ class CLFJob:
                                         model=model,
                                         device=device,
                                         use_auth_token=os.environ["HUGGINGFACE_API_KEY"])
-            return self.classifier 
+            return self.classifier
         elif self.task == "zero-shot-classification":
             model = self.model or 'facebook/bart-large-mnli'
             if not self.classifier:
@@ -114,9 +126,33 @@ class CLFJob:
                                         model=model,
                                         device=device,
                                         use_auth_token=os.environ["HUGGINGFACE_API_KEY"])
-            return self.classifier 
-        elif self.task == "both": 
-            if task == "text-classification": 
+            return self.classifier
+        elif self.task == "multi-model":
+            # Initialize an empty model
+            loaded_model = MultiModalModel(num_labels=2)
+            # Load the state dictionary
+            if self.minio_client:
+                model_load_path = './model.pth'
+                self.minio_client.get_model("multimodal", "model.pth", model_load_path)
+            else:
+                model_load_path = './model/model.pth'
+
+            # Check device
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+            # Load the model weights
+            if device == torch.device('cpu'):
+                loaded_model.load_state_dict(torch.load(model_load_path, map_location=device), strict=False)
+            else:
+                loaded_model.load_state_dict(torch.load(model_load_path), strict=False)
+
+            # Move model to evaluation mode and to the device
+            loaded_model.eval()
+            loaded_model = loaded_model.to(device)
+            self.classifier = loaded_model
+            return self.classifier
+        elif self.task == "both":
+            if task == "text-classification":
                 model = 'julesbarbosa/wildlife-classification'
             else:
                 model = 'facebook/bart-large-mnli'
@@ -124,7 +160,7 @@ class CLFJob:
                                 model=model,
                                 device=device,
                                 use_auth_token=os.environ["HUGGINGFACE_API_KEY"])
-            
+
 
     @staticmethod
     def get_label(x):

@@ -14,8 +14,10 @@ torch
 beautifulsoup4
 arrow
 psutil
-xformers
+# xformers
 sentencepiece
 protobuf==3.20.1
 chardet
 ftfy
+pybase64
+torchvision
