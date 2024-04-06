@@ -38,6 +38,7 @@ class ETLDiskJob(ProcessData):
     def get_files(self):
         try:
             files = os.listdir(self.path)
+            files= [file for file in files if file.endswith(".deflate")]
             logging.info(f"{len(files)} files to be processed")
         except FileNotFoundError:
             logging.error(f"No files on {self.path}")
@@ -249,6 +250,7 @@ class ETLDiskJob(ProcessData):
         return df_metas
 
     def get_decompressed_file(self, file):
+        print(f"FILE PATH {os.path.abspath(file)}")
         with open(f"{self.path}{file}", "rb") as f:
             decompressor = zlib.decompressobj()
             decompressed_data = decompressor.decompress(f.read())
