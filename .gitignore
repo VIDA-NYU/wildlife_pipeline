@@ -10,4 +10,5 @@ get_helm.sh
 image_data/
 ./myenv
 myvenv/
+wonder_pets.code-workspace
 # model/
