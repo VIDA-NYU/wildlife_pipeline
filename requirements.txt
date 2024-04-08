@@ -4,7 +4,7 @@ pybloom @ git+https://github.com/jaybaird/python-bloomfilter.git#egg=pybloom
 extruct==0.14.0
 minio==7.1.14
 pyarrow
-mlscraper==1.0.0rc3
+mlscraper @ git+https://github.com/lorey/mlscraper#egg=mlscraper
 fastparquet
 s3fs
 datamart_geo
@@ -21,3 +21,4 @@ chardet
 ftfy
 pybase64
 torchvision
+lxml<5.1.1  # https://github.com/scrapinghub/extruct/issues/215
