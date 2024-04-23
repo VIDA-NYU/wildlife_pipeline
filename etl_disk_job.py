@@ -248,6 +248,30 @@ class ETLDiskJob(ProcessData):
             df_metas[columns_to_fix] = df_metas[columns_to_fix].applymap(ProcessData.maybe_fix_text)
 
         return df_metas
+    
+    def extract(self, result: list):
+        def log_processed(
+                raw_count: int,
+                processed_count: int) -> None:
+            logging.info(f"{pd.Timestamp.now()}: received {raw_count} articles, total: "
+                         f"{processed_count} unique processed")
+
+        cache = []
+        count = 0
+        hits = len(result)
+        # print(hits)
+        for val in result:
+            # print(val)
+            processed = val.get("_source")
+            if processed:
+                if not ProcessData.remove_text(processed["text"]) and not self.bloom_filter.check_bloom_filter(
+                        processed["text"]):
+                    count += 1
+                    cache.append(processed)
+            elif val["content"]:
+                count += 1
+                cache.append(val)
+        log_processed(hits, count)
 
     def get_decompressed_file(self, file):
         print(f"FILE PATH {os.path.abspath(file)}")
