@@ -19,6 +19,10 @@ import os
 import shutil
 import tempfile
 
+# Spark-related import statements:
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf, col, lit, when, first, struct
+from pyspark.sql.types import StringType, BooleanType, ArrayType, StructType, StructField, DoubleType, FloatType
 
 
 from create_metadata import (
@@ -38,6 +42,12 @@ geo_data = datamart_geo.GeoData.download(update=False)
 
 class ProcessData:
     def __init__(self, bloom_filter, minio_client, bucket, task, column, model):
+        self.spark = SparkSession.builder\
+            .config("spark.executor.instances", "10") \
+            .config("spark.executor.cores", "4") \
+            .config("spark.executor.memory", "4g") \
+            .config("spark.dynamicAllocation.enabled", "true") \
+            .config("spark.shuffle.service.enabled", "true").getOrCreate()
         self.minio_client = minio_client
         self.bloom_filter = bloom_filter
         self.domains = {}
@@ -64,49 +74,51 @@ class ProcessData:
         if text:
             return any(phrase in text for phrase in constants.phrases_to_filter)
         return True
+    
+    @staticmethod
+    def extract_information_from_docs_udf(val, remove_text_func, check_bloom_filter_func):
+        processed = val.get("_source")
+        if processed:
+            if not remove_text_func(processed["text"]) and not check_bloom_filter_func(processed["text"]):
+                return processed
+        elif val["content"]:
+            return val
+        return None
 
-    def extract_information_from_docs(self, result: List[Dict]) -> pd.DataFrame:
+    def extract_information_from_docs(self, results):
+        # Convert list of dictionaries to DataFrame
+        rdd = self.spark.sparkContext.parallelize(results)
+        df = self.spark.createDataFrame(rdd)
 
-        def log_processed(
-                raw_count: int,
-                processed_count: int) -> None:
-            logging.info(f"{pd.Timestamp.now()}: received {raw_count} articles, total: "
-                         f"{processed_count} unique processed")
+        # Define UDFs
+        remove_text_udf = udf(ProcessData.remove_text, BooleanType())
+        check_bloom_filter_udf = udf(self.bloom_filter.check_bloom_filter, BooleanType())
+        extract_info_udf = udf(lambda x: self.extract_information_from_docs_udf(x, ProcessData.remove_text, self.bloom_filter.check_bloom_filter), StructType([
+            StructField("content", StringType(), True),
+            StructField("text", StringType(), True),
+            StructField("_source", StringType(), True)
+        ]))
 
-        cache = []
-        count = 0
-        hits = len(result)
-        # print(hits)
-        for val in result:
-            # print(val)
-            processed = val.get("_source")
-            if processed:
-                if not ProcessData.remove_text(processed["text"]) and not self.bloom_filter.check_bloom_filter(
-                        processed["text"]):
-                    count += 1
-                    cache.append(processed)
-            elif val["content"]:
-                count += 1
-                cache.append(val)
-        log_processed(hits, count)
-        df = pd.DataFrame()
-        if count > 0:
-            df = self.create_df(cache)
-            if not df.empty:
-                df["id"] = df.apply(lambda _: str(uuid.uuid4()), axis=1)
-                df = self.get_location_info(df)
+        # Apply UDFs to filter and extract information
+        df = df.withColumn("processed", extract_info_udf(col("value")))
+        df = df.filter(col("processed").isNotNull())
+
+        # Generate UUIDs and process location data
+        df = df.withColumn("id", udf(lambda: str(uuid.uuid4()), StringType())())
+        df = self.get_location_info(df)  # Assuming get_location_info is adapted for DataFrame usage
+
         return df
 
-    def create_df(self, ads: list) -> pd.DataFrame:
-        final_dict = []
+    def create_df(self, ads):
+        final_dicts = []
         for ad in ads:
             dict_df = self.create_dictionary_for_dataframe_extraction(ad)
-            final_dict.append(dict_df)
+            final_dicts.append(dict_df)
             domain = ad["domain"].split(".")[0]
             if "ebay" in domain:
                 extract_dict = dict_df.copy()
                 self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])
-                final_dict.append(extract_dict)
+                final_dicts.append(extract_dict)
             if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
                 try:
                     extract_dict = dict_df.copy()
@@ -114,75 +126,35 @@ class ProcessData:
                     extract_dict.update(scraper.get(Page(ad["html"])))
                     if extract_dict.get("product"):
                         extract_dict["name"] = extract_dict.pop("product")
-                    final_dict.append(extract_dict)
+                    final_dicts.append(extract_dict)
                 except Exception as e:
                     logging.error(f"MLscraper error: {e}")
-            try:
-                metadata = None
-                metadata = extruct.extract(ad["html"],
-                                        base_url=ad["url"],
-                                        uniform=True,
-                                        syntaxes=['json-ld',
-                                                    'microdata',
-                                                    'opengraph',
-                                                    'dublincore'])
-            except Exception as e:
-                logging.error(f"Exception on extruct: {e}")
 
-            if metadata:
-                if metadata.get("microdata"):
-                    for product in metadata.get("microdata"):
-                        micro = get_dict_microdata(product)
-                        if micro:
-                            extract_dict = dict_df.copy()
-                            extract_dict.update(micro)
-                            final_dict.append(extract_dict)
-                if metadata.get("opengraph"):
-                    open_ = get_sintax_opengraph(metadata.get("opengraph")[0])
-                    if open_:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(open_)
-                        final_dict.append(extract_dict)
-                if metadata.get("dublincore"):
-                    dublin = get_sintax_dublincore(metadata.get("dublincore")[0])
-                    if dublin:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(dublin)
-                        final_dict.append(extract_dict)
-                if metadata.get("json-ld"):
-                    for meta in metadata.get("json-ld"):
-                        if meta.get("@type") == 'Product':
-                            json_ld = get_dict_json_ld(meta)
-                            if json_ld:
-                                extract_dict = dict_df.copy()
-                                extract_dict.update(json_ld)
-                                final_dict.append(extract_dict)
-            logging.info("extracted metadata from ad")
-        df_metas = pd.DataFrame(final_dict)
-        df_metas["price"] = df_metas["price"].apply(lambda x: ProcessData.fix_price_str(x))
-        df_metas["currency"] = df_metas["currency"].apply(lambda x: ProcessData.fix_currency(x))
-        df_metas = df_metas.groupby('url').agg({
-            "title": 'first',
-            "text": 'first',
-            "domain": 'first',
-            "name": 'first',
-            "description": 'first',
-            "image": 'first',
-            "retrieved": 'first',
-            "production_data": 'first',
-            "category": 'first',
-            "price": 'first',
-            "currency": 'first',
-            "seller": 'first',
-            "seller_type": 'first',
-            "seller_url": 'first',
-            "location": 'first',
-            "ships to": 'first'}).reset_index()
-        df_metas = ProcessData.assert_types(df_metas)
+        # Convert list of dictionaries to Spark DataFrame
+        rdd = self.spark.sparkContext.parallelize(final_dicts)
+        df = self.spark.createDataFrame(rdd)
+
+        # Define UDFs for any transformations necessary
+        fix_price_udf = udf(ProcessData.fix_price_str, DoubleType())
+        fix_currency_udf = udf(ProcessData.fix_currency, StringType())
+        maybe_fix_text_udf = udf(ProcessData.maybe_fix_text, StringType())
+
+        # Apply transformations
+        df = df.withColumn("price", fix_price_udf(col("price")))
+        df = df.withColumn("currency", fix_currency_udf(col("currency")))
+
+        # Group by 'url' and aggregate other columns to get their first non-null value per group
+        agg_exprs = {col: first(col, ignorenulls=True) for col in df.columns if col != "url"}
+        df = df.groupBy("url").agg(agg_exprs)
+
+        # Assert data types and clean text data
+        df = ProcessData.assert_types(df)  # This would be a method to define column types properly
         columns_to_fix = ["title", "text", "name", "description"]
-        df_metas[columns_to_fix] = df_metas[columns_to_fix].applymap(ProcessData.maybe_fix_text)
-        print("df_metas created")
-        return df_metas
+        for column in columns_to_fix:
+            df = df.withColumn(column, maybe_fix_text_udf(col(column)))
+
+        logging.info("df_metas created")
+        return df
 
     @staticmethod
     def fix_price_str(price):
@@ -292,62 +264,85 @@ class ProcessData:
         return df
 
 
-    @staticmethod
-    def get_location_info(df):
-        def resolve_location(name):
-            if name:
-                parts = name.split(", ")  # Split the location string by comma
-                for part in parts:
-                    result = geo_data.resolve_name(part)  # Remove leading/trailing spaces and resolve each part
-                    if result:
-                        return result
-            return None
-        df["location"] = np.where(df["location"] == "None", None, df["location"])
-        df["location"] = np.where(df["location"] == "US", "USA", df["location"])
-        df["location"] = np.where(df["location"] == "GB", "Great Britain", df["location"])
-        df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
-        df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
-        df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
-        df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
-        df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
-        df = df.drop(columns=["loc"])
+    def resolve_location_udf(self, name):
+        if name:
+            parts = name.split(", ")  # Split the location string by comma
+            for part in parts:
+                result = self.geo_data.resolve_name(part.strip())  # Remove leading/trailing spaces and resolve each part
+                if result:
+                    return (result.name, result.latitude, result.longitude, result.get_parent_area(level=0).name if result.get_parent_area(level=0) else None)
+        return (None, None, None, None)
+
+    def get_location_info(self, df):
+        # Define the schema for the UDF return type
+        location_schema = StructType([
+            StructField("loc_name", StringType(), True),
+            StructField("lat", DoubleType(), True),
+            StructField("lon", DoubleType(), True),
+            StructField("country", StringType(), True)
+        ])
+
+        # Register UDF
+        resolve_location_udf = udf(self.resolve_location_udf, location_schema)
+
+        # Apply transformations
+        df = df.withColumn("location", when(col("location") == "None", None).otherwise(col("location")))
+        df = df.withColumn("location", when(col("location") == "US", "USA").otherwise(col("location")))
+        df = df.withColumn("location", when(col("location") == "GB", "Great Britain").otherwise(col("location")))
+        
+        # Apply UDF to resolve location details
+        df = df.withColumn("location_details", resolve_location_udf(col("location")))
+        
+        # Extract fields from the struct returned by the UDF
+        df = df.withColumn("loc_name", col("location_details.loc_name"))
+        df = df.withColumn("lat", col("location_details.lat"))
+        df = df.withColumn("lon", col("location_details.lon"))
+        df = df.withColumn("country", col("location_details.country"))
+        
+        # Drop the intermediate Struct column
+        df = df.drop("location_details")
+
         return df
 
     @staticmethod
     def assert_types(df):
         expected_dtypes = {
-            "title": str,
-            "text": str,
-            "domain": str,
-            "name": str,
-            "description": str,
-            "image": str,
-            "retrieved": str,
-            "production_data": str,
-            "category": str,
-            "price": float,
-            "currency": str,
-            "seller": str,
-            "seller_type": str,
-            "seller_url": str,
-            "location": str,
-            "ships to": str,
+            "title": StringType(),
+            "text": StringType(),
+            "domain": StringType(),
+            "name": StringType(),
+            "description": StringType(),
+            "image": StringType(),
+            "retrieved": StringType(),
+            "production_data": StringType(),
+            "category": StringType(),
+            "price": FloatType(),  # or DoubleType based on precision requirements
+            "currency": StringType(),
+            "seller": StringType(),
+            "seller_type": StringType(),
+            "seller_url": StringType(),
+            "location": StringType(),
+            "ships to": StringType(),
         }
 
-        # Convert each column to the expected data type
+        # Convert each column to the expected data type using casting
         for column, expected_dtype in expected_dtypes.items():
-            if expected_dtype == str:
-                df[column] = df[column].astype(expected_dtype)
-                try:
-                    df[column] = df[column].apply(
-                        lambda x: x.encode('utf-8', 'surrogateescape').decode('iso-8859-15') if isinstance(x,
-                                                                                                           str) else x)
-                except UnicodeEncodeError as e:
-                    print(column)
-                    print(e)
-                    df[column] = ""
-            else:
-                df[column] = df[column].astype(expected_dtype)
+            df = df.withColumn(column, col(column).cast(expected_dtype))
+
+        # Handling encoding issues can be more complex in Spark
+        # Here's a simple UDF that could handle potential encoding problems
+        def fix_encoding(x):
+            if x is not None:
+                return x.encode('utf-8', 'surrogateescape').decode('iso-8859-15')
+            return None
+
+        fix_encoding_udf = udf(fix_encoding, StringType())
+
+        # Apply the encoding fix UDF to all string columns
+        for column, expected_dtype in expected_dtypes.items():
+            if expected_dtype == StringType():
+                df = df.withColumn(column, fix_encoding_udf(col(column)))
+
         return df
 
     def run_classification(self, df: pd.DataFrame, bucket_name: Optional[str]) -> pd.DataFrame:

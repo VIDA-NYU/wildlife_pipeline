@@ -17,6 +17,10 @@ import logging
 import constants
 import pybase64
 
+# Spark-related import statements:
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+from pyspark.sql.types import StructType, StructField, StringType
 
 from create_metadata import (
     get_sintax_opengraph,
@@ -28,6 +32,12 @@ from create_metadata import (
 class ETLDiskJob(ProcessData):
     def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
                  model: str, bloom_filter: Optional[BloomFilter]):
+        self.spark = SparkSession.builder\
+            .config("spark.executor.instances", "10") \
+            .config("spark.executor.cores", "4") \
+            .config("spark.executor.memory", "4g") \
+            .config("spark.dynamicAllocation.enabled", "true") \
+            .config("spark.shuffle.service.enabled", "true").getOrCreate()
         super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, column=column,
                          model=model)
         self.bucket = bucket
@@ -37,75 +47,65 @@ class ETLDiskJob(ProcessData):
 
     def get_files(self):
         try:
-            files = os.listdir(self.path)
-            files= [file for file in files if file.endswith(".deflate")]
-            logging.info(f"{len(files)} files to be processed")
-        except FileNotFoundError:
-            logging.error(f"No files on {self.path}")
+            # Read the binary files from the path, filtering for .deflate files
+            # This DataFrame will contain paths and binary content of the files
+            df = self.spark.read.format("binaryFile") \
+                                .option("pathGlobFilter", "*.deflate") \
+                                .load(self.path)
+
+            file_count = df.count()
+            logging.info(f"{file_count} .deflate files to be processed")
+
+            # If needed, return only the file paths
+            return df.select("path")
+        
+        except Exception as e:
+            logging.error(f"Error accessing files on {self.path}: {str(e)}")
             return None
-        return files
 
     def run(self, folder_name: str, date: Optional[str]) -> None:
-        # Run ETL for all the files on the given path on disk
+        logging.info("Starting ETL Job")
         files = self.get_files()
-
         if files:
             for file in files:
                 logging.info(f"Starting processing file {file}")
                 final_filename = file.split(".")[0]
                 final_filename = f"{folder_name}{final_filename}"
+
+                df = self.spark.read.json(file)
+
+                # Filter out rows where title is null
+                df = df.filter(col("title").isNotNull())
+
                 if self.minio_client:
+                    # Check if file already exists in MinIO
                     checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
                 else:
                     checked_obj = False
-                if not checked_obj:
-                    cached = []
-                    processed = []
-                    count = 0
-                    decompressed_data = self.get_decompressed_file(file)
 
-                    # Processing decompressed data in batch size of 5000 records
-                    for line in decompressed_data.splitlines():
-                        json_doc = json.loads(line)
-                        cached.append(json_doc)
-                        count += 1
-                        if count % 5000 == 0:
-                            processed_df = self.extract_information_from_docs(cached)
-                            processed.append(processed_df)
-                            count = 0
-                            cached = []
-                    if len(cached) > 0:
-                        processed_df = self.extract_information_from_docs(cached)
-                        processed.append(processed_df)
-                    if len(processed) > 0:
-                        processed_df = pd.concat(processed).reset_index(drop=True)
-                        processed_df = processed_df[processed_df["title"].notnull()]
-                        if self.minio_client:
-                            self.load_file_to_minio(final_filename, processed_df)
-                        else:
-                            final_filename = final_filename+".csv"
-                            processed_df.to_csv(final_filename, index=False)
-                        if self.minio_client:
-                            image_bucket = f"images-{date}"
-                        else:
-                            image_bucket = None
-                        df_w_image_path = self.save_image_if_applicable(processed_df, date)
-                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
-                        if not processed_df.empty:
-                            if self.minio_client:
-                                self.load_file_to_minio(final_filename, processed_df)
-                            else:
-                                processed_df.to_csv(final_filename, index=False)
-                else:
-                    df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
-                    if "image_path" not in df.columns:
-                        image_bucket = f"images-{date}"
-                        df_w_image_path = self.save_image_if_applicable(df, date)
-                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
-                        if not processed_df.empty:
-                            self.load_file_to_minio(final_filename, processed_df)
+                if not checked_obj:
+                    # Extract information from JSON documents
+                    processed_df = self.extract_information_from_docs(df)
+
+                    # Save DataFrame to Parquet format
+                    if self.minio_client:
+                        self.load_file_to_minio(final_filename, processed_df)
                     else:
-                        logging.info(f"file {final_filename} already indexed")
+                        final_filename = final_filename + ".parquet"
+                        processed_df.write.parquet(final_filename, mode="overwrite")
+
+                    # Save images if applicable and perform classification
+                    image_bucket = f"images-{date}" if self.minio_client else None
+                    processed_df = self.save_and_classify_images(processed_df, date, image_bucket)
+
+                    # Save classified DataFrame
+                    if not processed_df.isEmpty():
+                        if self.minio_client:
+                            self.load_file_to_minio(final_filename, processed_df)
+                        else:
+                            processed_df.write.csv(final_filename, mode="overwrite", header=True)
+                else:
+                    logging.info(f"File {final_filename} already exists in MinIO")
             logging.info("ETL Job run completed")
 
     # Run classification and load data to MinIO

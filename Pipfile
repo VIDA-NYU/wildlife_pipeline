@@ -27,6 +27,7 @@ ftfy = "*"
 pybase64 = "*"
 torchvision = "*"
 lxml = "<5.1.1"
+pyspark = "*"
 
 [dev-packages]
 
