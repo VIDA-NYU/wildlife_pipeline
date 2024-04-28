@@ -60,3 +60,25 @@ labels = ["a real animal",
 The final dataframe will contain the labels with the highest score and the score for each of the two columns used for classification (product and description). After that we select the final label from the maximum score between the two predictions.
 
 In a separted bucket [zeros-shot-{month}] the results os the zero-shot clf is storaged. You can find the exactly parquet file name of the original dataframe. 
+
+
+## Documentation
+We follow the [PEP 257 - Docstring Convention for Python Docstrings](https://peps.python.org/pep-0257/) to allow for better readibility for functions.
+
+We use the `databricks-koalas` package for the Spark migration, as it provides seemless integration of the Pandas API for Spark. As the version of Spark on Dataproc is 3.2, we cannot use the up-to-date `pyspark-pandas` package.
+
+## Spark Installation Steps:
+1. Invoke `python -m venv spark-env` to create a virtual environment called `pyspark_env`.
+2. Activate the virtual environment with the following command: `source pyspark_env/bin/activate`
+3. Install the dependencies using the Pipfile: `pipenv install`
+4. Zip the virtual environment using `venv-pack`: `venv-pack -o pyspark_env.tar.gz`
+5. Upload the file to HDFS, and run the following commands:
+```
+export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
+export PYSPARK_PYTHON=./environment/bin/python
+spark-submit --archives pyspark_venv.tar.gz#environment test_process_data.py
+```
+
+## Testing:
+1. We add a small folder called `data2` which contains a subset of the .deflate files to test the functionality on a subset of the test files.
+

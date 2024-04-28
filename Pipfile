@@ -28,6 +28,9 @@ pybase64 = "*"
 torchvision = "*"
 lxml = "<5.1.1"
 pyspark = "*"
+virtualenv = "*"
+venv-pack = "*"
+koalas = "*"
 
 [dev-packages]
 

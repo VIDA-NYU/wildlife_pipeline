@@ -21,9 +21,10 @@ import tempfile
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, col, lit, when, first, struct
-from pyspark.sql.types import StringType, BooleanType, ArrayType, StructType, StructField, DoubleType, FloatType
-
+# from pyspark.sql.types import StructType, StringType, FloatType, StructField
+# from pyspark.sql.functions import udf, when, col
+# import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
+import databricks.koalas as ks
 
 from create_metadata import (
     open_scrap,
@@ -39,15 +40,40 @@ import ftfy
 
 geo_data = datamart_geo.GeoData.download(update=False)
 
+'''
+# UDF Helper Functions:
+def generate_uuid():
+    return str(uuid.uuid4())
+
+def resolve_location(name):
+    if name:
+        parts = name.split(", ")  # Split the location string by comma
+        for part in parts:
+            result = geo_data.resolve_name(part)  # Remove leading/trailing spaces and resolve each part
+            if result:
+                return result
+    return None
+
+# UDF register statements:
+uuid_udf = udf(generate_uuid, StringType)
+resolve_location_udf = udf(resolve_location, StringType())
+'''
+
 
 class ProcessData:
     def __init__(self, bloom_filter, minio_client, bucket, task, column, model):
+        '''
         self.spark = SparkSession.builder\
             .config("spark.executor.instances", "10") \
             .config("spark.executor.cores", "4") \
             .config("spark.executor.memory", "4g") \
             .config("spark.dynamicAllocation.enabled", "true") \
             .config("spark.shuffle.service.enabled", "true").getOrCreate()
+        '''
+        self.spark = SparkSession.builder.getOrCreate() # Default settings
+        ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
+        # ppd.enable_pandas_on_spark_session(self.spark) # Enable pyspark.pandas support
+        # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
         self.minio_client = minio_client
         self.bloom_filter = bloom_filter
         self.domains = {}
@@ -74,51 +100,58 @@ class ProcessData:
         if text:
             return any(phrase in text for phrase in constants.phrases_to_filter)
         return True
-    
-    @staticmethod
-    def extract_information_from_docs_udf(val, remove_text_func, check_bloom_filter_func):
-        processed = val.get("_source")
-        if processed:
-            if not remove_text_func(processed["text"]) and not check_bloom_filter_func(processed["text"]):
-                return processed
-        elif val["content"]:
-            return val
-        return None
 
-    def extract_information_from_docs(self, results):
-        # Convert list of dictionaries to DataFrame
-        rdd = self.spark.sparkContext.parallelize(results)
-        df = self.spark.createDataFrame(rdd)
+    def extract_information_from_docs(self, result: List[Dict]) -> ks.DataFrame:
 
-        # Define UDFs
-        remove_text_udf = udf(ProcessData.remove_text, BooleanType())
-        check_bloom_filter_udf = udf(self.bloom_filter.check_bloom_filter, BooleanType())
-        extract_info_udf = udf(lambda x: self.extract_information_from_docs_udf(x, ProcessData.remove_text, self.bloom_filter.check_bloom_filter), StructType([
-            StructField("content", StringType(), True),
-            StructField("text", StringType(), True),
-            StructField("_source", StringType(), True)
-        ]))
+        def log_processed(
+                raw_count: int,
+                processed_count: int) -> None:
+            logging.info(f"{pd.Timestamp.now()}: received {raw_count} articles, total: "
+                         f"{processed_count} unique processed")
 
-        # Apply UDFs to filter and extract information
-        df = df.withColumn("processed", extract_info_udf(col("value")))
-        df = df.filter(col("processed").isNotNull())
-
-        # Generate UUIDs and process location data
-        df = df.withColumn("id", udf(lambda: str(uuid.uuid4()), StringType())())
-        df = self.get_location_info(df)  # Assuming get_location_info is adapted for DataFrame usage
-
+        cache = []
+        count = 0
+        hits = len(result)
+        # print(hits)
+        for val in result:
+            # print(val)
+            processed = val.get("_source")
+            if processed:
+                if not ProcessData.remove_text(processed["text"]) and not self.bloom_filter.check_bloom_filter(
+                        processed["text"]):
+                    count += 1
+                    cache.append(processed)
+            elif val["content"]:
+                count += 1
+                cache.append(val)
+        log_processed(hits, count)
+        df = ks.DataFrame()
+        if count > 0:
+            """ 
+            Using rdds:
+            sc = self.spark.sparkContext
+            rdd = sc.parallelize(cache)
+            df = self.create_df(rdd)
+            if not df.rdd.isEmpty():
+                df = df.withColumn("id", uuid_udf())
+                df = self.get_location_info(df)
+            """
+            df = ks.create_df(cache)
+            if not df.empty:
+                df["id"] = df.apply(lambda _: str(uuid.uuid4()))
+                df = self.get_location_info(df)
         return df
 
     def create_df(self, ads):
-        final_dicts = []
+        final_dict = []
         for ad in ads:
             dict_df = self.create_dictionary_for_dataframe_extraction(ad)
-            final_dicts.append(dict_df)
+            final_dict.append(dict_df)
             domain = ad["domain"].split(".")[0]
             if "ebay" in domain:
                 extract_dict = dict_df.copy()
                 self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])
-                final_dicts.append(extract_dict)
+                final_dict.append(extract_dict)
             if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
                 try:
                     extract_dict = dict_df.copy()
@@ -126,35 +159,55 @@ class ProcessData:
                     extract_dict.update(scraper.get(Page(ad["html"])))
                     if extract_dict.get("product"):
                         extract_dict["name"] = extract_dict.pop("product")
-                    final_dicts.append(extract_dict)
+                    final_dict.append(extract_dict)
                 except Exception as e:
                     logging.error(f"MLscraper error: {e}")
+            
+            # Handling metadata extraction and processing
+            try:
+                metadata = extruct.extract(ad["html"],
+                                           base_url=ad["url"],
+                                           uniform=True,
+                                           syntaxes=['json-ld', 'microdata', 'opengraph', 'dublincore'])
+                if metadata:
+                    self.process_metadata(metadata, dict_df, final_dict)
+            except Exception as e:
+                logging.error(f"Exception on extruct: {e}")
 
-        # Convert list of dictionaries to Spark DataFrame
-        rdd = self.spark.sparkContext.parallelize(final_dicts)
-        df = self.spark.createDataFrame(rdd)
+        # Convert final_dict to a Koalas DataFrame
+        kdf_metas = ks.DataFrame(final_dict)
+        
+        # Applying transformations using Koalas operations
+        kdf_metas["price"] = kdf_metas["price"].apply(lambda x: self.fix_price_str(x), dtype='float')
+        kdf_metas["currency"] = kdf_metas["currency"].apply(lambda x: self.fix_currency(x))
 
-        # Define UDFs for any transformations necessary
-        fix_price_udf = udf(ProcessData.fix_price_str, DoubleType())
-        fix_currency_udf = udf(ProcessData.fix_currency, StringType())
-        maybe_fix_text_udf = udf(ProcessData.maybe_fix_text, StringType())
+        # Grouping and aggregation in Koalas
+        kdf_metas = kdf_metas.groupby('url').agg({
+            "title": 'first',
+            "text": 'first',
+            "domain": 'first',
+            "name": 'first',
+            "description": 'first',
+            "image": 'first',
+            "retrieved": 'first',
+            "production_data": 'first',
+            "category": 'first',
+            "price": 'first',
+            "currency": 'first',
+            "seller": 'first',
+            "seller_type": 'first',
+            "seller_url": 'first',
+            "location": 'first',
+            "ships_to": 'first'
+        }).reset_index()
 
-        # Apply transformations
-        df = df.withColumn("price", fix_price_udf(col("price")))
-        df = df.withColumn("currency", fix_currency_udf(col("currency")))
-
-        # Group by 'url' and aggregate other columns to get their first non-null value per group
-        agg_exprs = {col: first(col, ignorenulls=True) for col in df.columns if col != "url"}
-        df = df.groupBy("url").agg(agg_exprs)
-
-        # Assert data types and clean text data
-        df = ProcessData.assert_types(df)  # This would be a method to define column types properly
+        # Perform any necessary data type conversions or text fixing
+        kdf_metas = self.assert_types(kdf_metas)
         columns_to_fix = ["title", "text", "name", "description"]
-        for column in columns_to_fix:
-            df = df.withColumn(column, maybe_fix_text_udf(col(column)))
+        kdf_metas[columns_to_fix] = kdf_metas[columns_to_fix].apply(lambda x: self.maybe_fix_text(x), dtype='str')
 
-        logging.info("df_metas created")
-        return df
+        print("kdf_metas created")
+        return kdf_metas
 
     @staticmethod
     def fix_price_str(price):
@@ -202,150 +255,177 @@ class ProcessData:
             x = ", ".join(x)
         return x
 
-    def send_image(self, df: pd.DataFrame, image_folder: Optional[str], bucket_name: str, task: Optional[str],
+    def send_image(self, df: ks.DataFrame, image_folder: Optional[str], bucket_name: str, task: Optional[str],
                    timeout_sec: Optional[int] = 30):
-        def send_image_to_minio(row):
+        def send_image_to_minio(image_url, img_id):
             try:
-                response = requests.get(row["image"], timeout=timeout_sec)
+                response = requests.get(image_url, timeout=timeout_sec)
                 img = Image.open(BytesIO(response.content))
-                image_array = asarray(img)
-                image_path = send(image_array, row["id"])
-                image_path = bucket_name + "/" + image_path
-                return image_path
+                image_array = np.asarray(img)
+                return save_image_to_minio(image_array, img_id)
             except Exception as e:
                 print(f"image error: {e}")
                 return None
-        def send(image_array, img_id):
+
+        def save_image_to_minio(image_array, img_id):
             pil_image = Image.fromarray(image_array)
-            # Save the image to an in-memory file
             in_mem_file = BytesIO()
             pil_image.save(in_mem_file, format='png')
             in_mem_file.seek(0)
             length = len(in_mem_file.read())
             in_mem_file.seek(0)
-
-            if image_folder:
-                file_name = f"{image_folder}/{img_id}.png"
-            else:
-                file_name = f"{img_id}.png"
-
+            file_name = f"{image_folder}/{img_id}.png" if image_folder else f"{img_id}.png"
             self.minio_client.store_image(image=in_mem_file, file_name=file_name, length=length, bucket_name=bucket_name)
-            return file_name
+            return bucket_name + "/" + file_name
 
-        # if task:
-        #     sample_indices_0 = df[df["pred"] == 0].sample(int(len(df[df["pred"] == 0]) * 0.2)).index
-        #     sample_indices_1 = df[df["pred"] == 1].index
-        #     df["sample_image"] = False  # Initialize the column with "false"
-        #     df.loc[sample_indices_0, "sample_image"] = True  # Set "true" for sample indices
-        #     df.loc[sample_indices_1, "sample_image"] = True
-        # else:
-        # df["sample_image"] = True
+        # Pandas UDFs require conversion back to Koalas, so handle this carefully:
+        if isinstance(df, ks.DataFrame):
+            # Converting to pandas for the image processing part since it involves I/O operations
+            pdf = df.to_pandas()
+            pdf['image_path'] = [send_image_to_minio(row['image'], row['id']) for index, row in pdf.iterrows()]
+            result_df = ks.from_pandas(pdf)
+        else:
+            # This block is for safety, in case df is already a pandas DataFrame
+            df['image_path'] = [send_image_to_minio(row['image'], row['id']) for index, row in df.iterrows()]
+            result_df = df
 
-        df["image_path"] = df.apply(lambda x: send_image_to_minio(x), axis=1)
-
-        # df = df.drop(columns=["sample_image"])
-
-        return df
+        return result_df
 
     @staticmethod
     def save_image_local(df, image_folder):
-        def save_image(row):
+        def save_image(image_url, img_id):
             try:
-                response = requests.get(row["image"], timeout=30)
+                response = requests.get(image_url, timeout=30)
                 img = Image.open(BytesIO(response.content))
-                image_path = os.path.join(image_folder, f"{row['id']}.png")
-                img.save(image_path)  # Save the image locally
+                image_path = os.path.join(image_folder, f"{img_id}.png")
+                img.save(image_path)
                 return image_path
             except Exception as e:
                 print(f"image error: {e}")
                 return None
-        df["image_path"] = df.apply(lambda x: save_image(x), axis=1)
+
+        # Similar approach as send_image, handle df conversion if necessary
+        if isinstance(df, ks.DataFrame):
+            pdf = df.to_pandas()
+            pdf['image_path'] = [save_image(row['image'], row['id']) for index, row in pdf.iterrows()]
+            result_df = ks.from_pandas(pdf)
+        else:
+            df['image_path'] = [save_image(row['image'], row['id']) for index, row in df.iterrows()]
+            result_df = df
+
+        return result_df
+
+
+    @staticmethod
+    def get_location_info(df):
+        """
+        Using pyspark.pandas:
+        def resolve_location(name):
+            if name:
+                parts = name.split(", ")  # Split the location string by comma
+                for part in parts:
+                    result = geo_data.resolve_name(part)  # Remove leading/trailing spaces and resolve each part
+                    if result:
+                        return result
+            return None
+        # With pyspark.pandas
+        df["location"] = ppd.when(df["location"] == "None", None).otherwise(df["location"])
+        df["location"] = ppd.when(df["location"] == "US", "USA").otherwise(df["location"])
+        df["location"] = ppd.when(df["location"] == "GB", "Great Britain").otherwise(df["location"])
+        df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
+        df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
+        df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
+        df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
+        df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
+        df = df.drop(columns=["loc"])
+        return df
+        """
+        
+        def resolve_location(name):
+            if name:
+                parts = name.split(", ")  # Split the location string by comma
+                for part in parts:
+                    result = geo_data.resolve_name(part.strip())  # Attempt to resolve each part
+                    if result:
+                        return result
+            return None
+
+        # Koalas does not support `when` directly, so use `apply` for conditional changes
+        df["location"] = df["location"].apply(lambda x: None if x == "None" else x)
+        df["location"] = df["location"].apply(lambda x: "USA" if x == "US" else x)
+        df["location"] = df["location"].apply(lambda x: "Great Britain" if x == "GB" else x)
+
+        # Resolve locations
+        df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
+        
+        # Extract information from resolved locations
+        df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
+        df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
+        df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
+        df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
+        
+        # Drop the temporary 'loc' column
+        df = df.drop(columns=["loc"])
 
         return df
-
-
-    def resolve_location_udf(self, name):
-        if name:
-            parts = name.split(", ")  # Split the location string by comma
-            for part in parts:
-                result = self.geo_data.resolve_name(part.strip())  # Remove leading/trailing spaces and resolve each part
-                if result:
-                    return (result.name, result.latitude, result.longitude, result.get_parent_area(level=0).name if result.get_parent_area(level=0) else None)
-        return (None, None, None, None)
-
-    def get_location_info(self, df):
-        # Define the schema for the UDF return type
-        location_schema = StructType([
-            StructField("loc_name", StringType(), True),
-            StructField("lat", DoubleType(), True),
-            StructField("lon", DoubleType(), True),
-            StructField("country", StringType(), True)
-        ])
-
-        # Register UDF
-        resolve_location_udf = udf(self.resolve_location_udf, location_schema)
-
-        # Apply transformations
-        df = df.withColumn("location", when(col("location") == "None", None).otherwise(col("location")))
-        df = df.withColumn("location", when(col("location") == "US", "USA").otherwise(col("location")))
-        df = df.withColumn("location", when(col("location") == "GB", "Great Britain").otherwise(col("location")))
-        
-        # Apply UDF to resolve location details
-        df = df.withColumn("location_details", resolve_location_udf(col("location")))
-        
-        # Extract fields from the struct returned by the UDF
-        df = df.withColumn("loc_name", col("location_details.loc_name"))
-        df = df.withColumn("lat", col("location_details.lat"))
-        df = df.withColumn("lon", col("location_details.lon"))
-        df = df.withColumn("country", col("location_details.country"))
-        
-        # Drop the intermediate Struct column
-        df = df.drop("location_details")
-
+    
+        """
+        With pyspark.sql
+        df = df.withColumn("location",  when(col("location") == "None", None)
+                                        .when(col("location") == "US", "USA")
+                                        .when(col("location") == "GB", "Great Britain")
+                                        .otherwise(col("location")))
+        df = df.withColumn("loc",   when(col("location").isNull(), None)
+                                    .otherwise(resolve_location_udf(col("location"))))
+        df = df.withColumn("loc_name",  when(col("loc").isNull(), None)
+                                        .otherwise(col("loc").getField("name")))
+        df = df.withColumn("lat",   when(col("loc").isNull(), None)
+                                    .otherwise(col("loc").getField("latitude")))
+        df = df.withColumn("lon",   when(col("loc").isNull(), None)
+                                    .otherwise(col("loc").getField("longitude")))
+        df = df.withColumn("country", when(col("loc").isNull(), None).otherwise(col("loc").getField("get_parent_area").getItem(0).getField("name")))
+        df = df.drop("loc")
         return df
-
+        """
+        
     @staticmethod
     def assert_types(df):
         expected_dtypes = {
-            "title": StringType(),
-            "text": StringType(),
-            "domain": StringType(),
-            "name": StringType(),
-            "description": StringType(),
-            "image": StringType(),
-            "retrieved": StringType(),
-            "production_data": StringType(),
-            "category": StringType(),
-            "price": FloatType(),  # or DoubleType based on precision requirements
-            "currency": StringType(),
-            "seller": StringType(),
-            "seller_type": StringType(),
-            "seller_url": StringType(),
-            "location": StringType(),
-            "ships to": StringType(),
+            "title": str,
+            "text": str,
+            "domain": str,
+            "name": str,
+            "description": str,
+            "image": str,
+            "retrieved": str,
+            "production_data": str,
+            "category": str,
+            "price": float,
+            "currency": str,
+            "seller": str,
+            "seller_type": str,
+            "seller_url": str,
+            "location": str,
+            "ships to": str,
         }
 
-        # Convert each column to the expected data type using casting
+        # Convert each column to the expected data type
         for column, expected_dtype in expected_dtypes.items():
-            df = df.withColumn(column, col(column).cast(expected_dtype))
-
-        # Handling encoding issues can be more complex in Spark
-        # Here's a simple UDF that could handle potential encoding problems
-        def fix_encoding(x):
-            if x is not None:
-                return x.encode('utf-8', 'surrogateescape').decode('iso-8859-15')
-            return None
-
-        fix_encoding_udf = udf(fix_encoding, StringType())
-
-        # Apply the encoding fix UDF to all string columns
-        for column, expected_dtype in expected_dtypes.items():
-            if expected_dtype == StringType():
-                df = df.withColumn(column, fix_encoding_udf(col(column)))
-
+            if expected_dtype == str:
+                df[column] = df[column].astype(expected_dtype)
+                try:
+                    df[column] = df[column].apply(
+                        lambda x: x.encode('utf-8', 'surrogateescape').decode('iso-8859-15') if isinstance(x,
+                                                                                                           str) else x)
+                except UnicodeEncodeError as e:
+                    print(column)
+                    print(e)
+                    df[column] = ""
+            else:
+                df[column] = df[column].astype(expected_dtype)
         return df
 
-    def run_classification(self, df: pd.DataFrame, bucket_name: Optional[str]) -> pd.DataFrame:
+    def run_classification(self, df: ks.DataFrame, bucket_name: Optional[str]) -> ks.DataFrame:
         logging.info(self.task)
         classifier_job = CLFJob(bucket=self.bucket, final_bucket=self.bucket, minio_client=self.minio_client,
                                 date_folder=None, task=self.task, model=self.model, column=self.column)
@@ -358,7 +438,10 @@ class ProcessData:
                 folder_path= "./image_data"
                 os.makedirs(folder_path, exist_ok=True)
                 temp_dir = tempfile.mkdtemp(dir=folder_path)
-                df = ProcessData.save_image_local(df, temp_dir)
+                # Assuming save_image_local converts Koalas DF to pandas DF for image processing
+                pdf = df.to_pandas()  # Converting to pandas DF for image processing
+                pdf = ProcessData.save_image_local(pdf, temp_dir)
+                df = ks.from_pandas(pdf)  # Convert back to Koalas DF
                 df = classifier_job.get_inference_for_mmm(df, bucket_name)
                 shutil.rmtree(temp_dir)
             else:
@@ -367,11 +450,11 @@ class ProcessData:
             df = classifier_job.get_inference(df)
             df = classifier_job.get_inference_for_column(df)
         else:
-            raise ValueError("Task is either text-classification or zero-shot-classification")
+            raise ValueError("Task is either text-classification, zero-shot-classification, multi-model, or both")
         return df
 
     @staticmethod
-    def create_dictionary_for_dataframe_extraction(ad):
+    def create_dictionary_for_dataframe_extraction(self, ad):
         dict_df = {
             "url": ad["url"],
             "title": ad["title"],
@@ -391,18 +474,24 @@ class ProcessData:
             "location": None,
             "ships to": None,
         }
-        return dict_df
+        sdf = ks.DataFrame(dict_df)
+        return sdf
 
     @staticmethod
     def maybe_fix_text(x):
         # fixes Unicode that’s broken in various ways
         return ftfy.fix_text(x) if isinstance(x, str) else x
 
-    def add_seller_information_to_metadata(self, domain: str, metadata: dict, soup):
+    #self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])    
+    def add_seller_information_to_metadata(self, domain, metadata, soup):
         if 'ebay' in domain:
             seller_username, location = self.extract_seller_info_for_ebay(soup)
-            metadata["seller"] = seller_username
-            metadata["location"] = location
+            
+            # In Koalas, use the `assign` method to add new columns or modify existing ones
+            # This method is akin to the pandas' way and is generally used for Koalas DataFrames
+            metadata = metadata.assign(seller=seller_username, location=location)
+
+        return metadata
 
     @staticmethod
     def extract_seller_info_for_ebay(soup):
@@ -445,3 +534,28 @@ class ProcessData:
             parser = 'plain'
         else:
             return None
+
+    """
+    def get_schema():
+        schema = StructType([
+            StructField("url", StringType()),
+            StructField("title", StringType()),
+            StructField("text", StringType()),
+            StructField("domain", StringType()),
+            StructField("retrieved", StringType()),
+            StructField("name", StringType()),
+            StructField("description", StringType()),
+            StructField("image", StringType()),
+            StructField("production_data", StringType()),
+            StructField("category", StringType()),
+            StructField("price", FloatType()),
+            StructField("currency", StringType()),
+            StructField("seller", StringType()),
+            StructField("seller_type", StringType()),
+            StructField("seller_url", StringType()),
+            StructField("location", StringType()),
+            StructField("ships_to", StringType())
+        ])
+        return schema
+    """    
+    

@@ -17,10 +17,10 @@ import logging
 import constants
 import pybase64
 
-# Spark-related import statements:
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
-from pyspark.sql.types import StructType, StructField, StringType
+# Spark-related import statements
+from pyspark.sql import SparkSession, DataFrame
+import databricks.koalas as ks
+# import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
 
 from create_metadata import (
     get_sintax_opengraph,
@@ -32,80 +32,99 @@ from create_metadata import (
 class ETLDiskJob(ProcessData):
     def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
                  model: str, bloom_filter: Optional[BloomFilter]):
-        self.spark = SparkSession.builder\
-            .config("spark.executor.instances", "10") \
-            .config("spark.executor.cores", "4") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.dynamicAllocation.enabled", "true") \
-            .config("spark.shuffle.service.enabled", "true").getOrCreate()
         super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, column=column,
                          model=model)
         self.bucket = bucket
         self.path = path
         self.save_image = save_image
         self.task = task
+        self.spark = SparkSession.builder.getOrCreate() # Default settings
+        ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
+        # ppd.enable_pandas_on_spark_session(self.spark) # Enable pyspark.pandas support
+        # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
 
     def get_files(self):
         try:
-            # Read the binary files from the path, filtering for .deflate files
-            # This DataFrame will contain paths and binary content of the files
-            df = self.spark.read.format("binaryFile") \
-                                .option("pathGlobFilter", "*.deflate") \
-                                .load(self.path)
-
-            file_count = df.count()
-            logging.info(f"{file_count} .deflate files to be processed")
-
-            # If needed, return only the file paths
-            return df.select("path")
-        
-        except Exception as e:
-            logging.error(f"Error accessing files on {self.path}: {str(e)}")
+            files = os.listdir(self.path)
+            files= [file for file in files if file.endswith(".deflate")]
+            logging.info(f"{len(files)} files to be processed")
+        except FileNotFoundError:
+            logging.error(f"No files on {self.path}")
             return None
+        return files
 
     def run(self, folder_name: str, date: Optional[str]) -> None:
-        logging.info("Starting ETL Job")
+        """
+        Given a directory, runs the ETL pipeline on all files ending with the .deflate suffix.
+
+        Involves the following steps:
+        1. Retrieve the raw data via decompression
+        - The data will be a collection of JSON strings, each representing information about an ad.
+        2. In batches of 5000, run the ETL pipeline on the ads from the file.
+        3. Once we have processed through all the ads in a given file, we run the final classification and 
+           load step, which involves running the classification, then storing the processed dataframe &
+           images to a MinIO bucket.
+        """
         files = self.get_files()
         if files:
             for file in files:
                 logging.info(f"Starting processing file {file}")
-                final_filename = file.split(".")[0]
-                final_filename = f"{folder_name}{final_filename}"
-
-                df = self.spark.read.json(file)
-
-                # Filter out rows where title is null
-                df = df.filter(col("title").isNotNull())
-
+                final_filename = f"{folder_name}{file.split('.')[0]}"
+                
+                # Check if the file has already been processed and stored
                 if self.minio_client:
-                    # Check if file already exists in MinIO
                     checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
                 else:
                     checked_obj = False
 
                 if not checked_obj:
-                    # Extract information from JSON documents
-                    processed_df = self.extract_information_from_docs(df)
+                    cached = []
+                    processed = []
+                    decompressed_data = self.get_decompressed_file(file)
+                    
+                    # Process each line as a separate JSON document
+                    for line in decompressed_data.splitlines():
+                        json_doc = json.loads(line)
+                        cached.append(json_doc)
+                        if len(cached) == 5000:
+                            processed_df = self.extract_information_from_docs(ks.DataFrame(cached))
+                            processed.append(processed_df)
+                            cached = []
 
-                    # Save DataFrame to Parquet format
-                    if self.minio_client:
-                        self.load_file_to_minio(final_filename, processed_df)
-                    else:
-                        final_filename = final_filename + ".parquet"
-                        processed_df.write.parquet(final_filename, mode="overwrite")
+                    if cached:
+                        processed_df = self.extract_information_from_docs(ks.DataFrame(cached))
+                        processed.append(processed_df)
 
-                    # Save images if applicable and perform classification
-                    image_bucket = f"images-{date}" if self.minio_client else None
-                    processed_df = self.save_and_classify_images(processed_df, date, image_bucket)
+                    if processed:
+                        # Concatenate all processed dataframes
+                        processed_df = ks.concat(processed).reset_index(drop=True)
+                        processed_df = processed_df[processed_df['title'].notnull()]
 
-                    # Save classified DataFrame
-                    if not processed_df.isEmpty():
+                        # Save processed data locally or to MinIO
                         if self.minio_client:
+                            self.load_file_to_minio(final_filename, processed_df.to_pandas())  # Converting to pandas for compatibility
+                        else:
+                            processed_df.to_csv(f"{final_filename}.csv", index=False)
+
+                        # Further processing if images need to be saved
+                        if self.save_image:
+                            image_bucket = f"images-{date}" if self.minio_client else None
+                            df_w_image_path = self.save_image_if_applicable(processed_df, date)
+                            processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                            if not processed_df.empty:
+                                if self.minio_client:
+                                    self.load_file_to_minio(final_filename, processed_df.to_pandas())
+                                else:
+                                    processed_df.to_csv(f"{final_filename}.csv", index=False)
+                else:
+                    df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
+                    if "image_path" not in df.columns:
+                        df_w_image_path = self.save_image_if_applicable(df, date)
+                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                        if not processed_df.empty:
                             self.load_file_to_minio(final_filename, processed_df)
                         else:
-                            processed_df.write.csv(final_filename, mode="overwrite", header=True)
-                else:
-                    logging.info(f"File {final_filename} already exists in MinIO")
+                            logging.info(f"file {final_filename} already indexed")
             logging.info("ETL Job run completed")
 
     # Run classification and load data to MinIO
@@ -134,7 +153,7 @@ class ETLDiskJob(ProcessData):
         else:
             return False
 
-    def create_df(self, ads: list) -> pd.DataFrame:
+    def create_df(self, ads: list) -> ks.DataFrame:
         final_dict = []
         for ad in ads:
             html_content = ETLDiskJob.get_decoded_html_from_bytes(ad["content"])
@@ -221,33 +240,43 @@ class ETLDiskJob(ProcessData):
                                         final_dict.append(extract_dict)
                                         extract_dict = None
                     metadata = None
-        df_metas = pd.DataFrame()
-        if len(final_dict) > 0:
-            df_metas = pd.DataFrame(final_dict)
-            df_metas["price"] = df_metas["price"].apply(lambda x: ProcessData.fix_price_str(x))
-            df_metas["currency"] = df_metas["currency"].apply(lambda x: ProcessData.fix_currency(x))
-            df_metas = df_metas.groupby('url').agg({
-                "title": 'first',
-                "text": 'first',
-                "domain": 'first',
-                "name": 'first',
-                "description": 'first',
-                "image": 'first',
-                "retrieved": 'first',
-                "production_data": 'first',
-                "category": 'first',
-                "price": 'first',
-                "currency": 'first',
-                "seller": 'first',
-                "seller_type": 'first',
-                "seller_url": 'first',
-                "location": 'first',
-                "ships to": 'first'}).reset_index()
-            df_metas = ProcessData.assert_types(df_metas)
-            columns_to_fix = ["title", "text", "name", "description"]
-            df_metas[columns_to_fix] = df_metas[columns_to_fix].applymap(ProcessData.maybe_fix_text)
+        if final_dict:
+            # Creating a Koalas DataFrame from the list of dictionaries
+            df_metas = ks.DataFrame(final_dict)
 
-        return df_metas
+            # Converting price and currency using user-defined functions or direct lambda functions
+            df_metas['price'] = df_metas['price'].apply(lambda x: ProcessData.fix_price_str(x) if x else None, dtype=str)
+            df_metas['currency'] = df_metas['currency'].apply(lambda x: ProcessData.fix_currency(x) if x else None, dtype=str)
+            
+            # Grouping and aggregation in Koalas
+            df_metas = df_metas.groupby('url').agg({
+                'title': 'first',
+                'text': 'first',
+                'domain': 'first',
+                'name': 'first',
+                'description': 'first',
+                'image': 'first',
+                'retrieved': 'first',
+                'production_data': 'first',
+                'category': 'first',
+                'price': 'first',
+                'currency': 'first',
+                'seller': 'first',
+                'seller_type': 'first',
+                'seller_url': 'first',
+                'location': 'first',
+                'ships to': 'first'
+            }).reset_index()
+
+            # Assuming assert_types and maybe_fix_text are methods that are adapted for use with Koalas
+            df_metas = self.assert_types(df_metas)
+            columns_to_fix = ["title", "text", "name", "description"]
+            for column in columns_to_fix:
+                df_metas[column] = df_metas[column].astype(str).apply(lambda x: self.maybe_fix_text(x) if x else None, dtype=str)
+
+            return df_metas
+
+        return ks.DataFrame()
     
     def extract(self, result: list):
         def log_processed(

@@ -26,6 +26,7 @@ class TestProcessData(unittest.TestCase):
     '''
 
     # Test 2 (Run Transform)
+    '''
     def test_transform(self):
         job = ETLDiskJob("local", None, "data/", True, None, None, None, None)
         files = os.listdir("data/") 
@@ -37,11 +38,12 @@ class TestProcessData(unittest.TestCase):
                     json_doc = json.loads(line)
                     cached.append(json_doc)
                 df = job.create_df(cached)
-
+    '''
+    
     # Test 3 (Run the classifier)
     '''
     def test_perform_classification(self):
-        df = pd.read_csv("data/test_2.csv")
+        df = pd.read_csv("test_2.csv")
         df = df[0:100]
         job = ETLDiskJob("local", None, "data/", None, "multi-model", None, None, None)
 
@@ -63,6 +65,16 @@ class TestProcessData(unittest.TestCase):
             assert not df.empty
             assert "predicted_label" in df.columns
     '''
+    def test_single_integration(self):
+        job = ETLDiskJob("local", None, "data/", None, "multi-model", None, None, None)
+        job.run("", "image_data")
+        files = os.listdir("data2/")
+        for file in files:
+            filename = file.split(".")[0]
+            df = pd.read_csv(filename+".csv")
+            assert not df.empty
+            assert "predicted_label" in df.columns
+    
 
 if __name__ == '__main__':
     unittest.main()

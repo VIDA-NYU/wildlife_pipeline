@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 import numpy as np
 from transformers import pipeline
-
+import databricks.koalas as ks
 
 class InferenceJob():
     def __init__(self, bucket: str, final_bucket: str, minio_client: Any, column: str, task: str):
@@ -35,19 +35,28 @@ class InferenceJob():
             else:
                 continue
 
-    def get_inference(self, df: pd.DataFrame) -> pd.DataFrame:
+    def get_inference(self, df: ks.DataFrame) -> ks.DataFrame:
         classifier = self.maybe_load_classifier(task=None)
         ## Product column
         df[self.column] = df[self.column].fillna("")
-        not_empty_filter = (df[self.column] != "")
-        inputs = df[not_empty_filter][self.column].to_list()
-        results = classifier(inputs, self.labels, hypothesis_template=self.hypothesis_template)
 
-        # Set the results to a new column in the dataframe
-        labels = [result['labels'][0] if result is not None else np.nan for result in results]
-        scores = [result['scores'][0] if result is not None else np.nan for result in results]
-        df.loc[not_empty_filter, "label"] = labels
-        df.loc[not_empty_filter, "score"] = scores
+        # Filter out non-empty entries
+        not_empty_df = df[df[self.column] != ""]
+
+        # Apply classifier to non-empty entries
+        def classify_text(text):
+            if text:
+                result = classifier([text], self.labels, hypothesis_template=self.hypothesis_template)
+                if result:
+                    return result['labels'][0], result['scores'][0]
+            return np.nan, np.nan
+
+        # Using 'apply' to create new columns for labels and scores
+        not_empty_df[['label', 'score']] = not_empty_df[self.column].apply(lambda x: classify_text(x)).apply(list).to_list()
+
+        # Combine the results back into the original DataFrame
+        df = df.assign(label=np.nan, score=np.nan)  # Initialize the columns
+        df.update(not_empty_df[['label', 'score']], join='left')  # Update from not_empty_df
 
         return df
 

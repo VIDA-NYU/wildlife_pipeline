@@ -5,7 +5,7 @@ from io import BytesIO
 from minio.error import S3Error
 import pickle
 import yaml
-
+import databricks.koalas as ks
 
 class MinioClient:
     def __init__(self, access_key: str, secret_access_key: str):
@@ -36,26 +36,27 @@ class MinioClient:
         self.client.fget_object(bucket_name, obj_name, path)
 
 
-    def read_csv(self, bucket: str, file_name: str) -> pd.DataFrame:
-        df = pd.read_csv(
-            f"s3://{bucket}/{file_name}",
-            storage_options=self.get_storage_options)
+    def read_csv(self, bucket: str, file_name: str) -> ks.DataFrame:
+        """Read a CSV file into a Koalas DataFrame from S3."""
+        path = f"s3://{bucket}/{file_name}"
+        storage_options = self.get_storage_options()  # Ensure this method returns a dictionary
+        df = ks.read_csv(path, storage_options=storage_options)
         return df
 
-    def read_df_parquet(self, bucket: str, file_name: str) -> pd.DataFrame:
-        df = pd.read_parquet(
-            f"s3://{bucket}/{file_name}",
-            storage_options=self.get_storage_options())
+    def read_df_parquet(self, bucket: str, file_name: str) -> ks.DataFrame:
+        """Read a Parquet file into a Koalas DataFrame from S3."""
+        path = f"s3://{bucket}/{file_name}"
+        storage_options = self.get_storage_options()
+        df = ks.read_parquet(path, storage_options=storage_options)
         return df
 
-    def save_df_parquet(self, bucket: str, file_name: str, df: pd.DataFrame) -> None:
-        file_name = f"s3://{bucket}/{file_name}.parquet"
+    def save_df_parquet(self, bucket: str, file_name: str, df: ks.DataFrame) -> None:
+        """Save a Koalas DataFrame to a Parquet file on S3."""
+        file_path = f"s3://{bucket}/{file_name}.parquet"
         storage = self.get_storage_options()
-        df.to_parquet(
-            file_name,
-            index=False,
-            storage_options=storage)
-        print(f"{file_name} saved on bucket {bucket}")
+        df.to_parquet(file_path, index=False, storage_options=storage)
+        print(f"{file_path} saved on bucket {bucket}")
+
 
     def store_image(self, image: Any, file_name: str, length: int, bucket_name: str):
         self.client.put_object(
