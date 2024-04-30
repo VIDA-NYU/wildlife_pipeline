@@ -68,15 +68,19 @@ We follow the [PEP 257 - Docstring Convention for Python Docstrings](https://pep
 We use the `databricks-koalas` package for the Spark migration, as it provides seemless integration of the Pandas API for Spark. As the version of Spark on Dataproc is 3.2, we cannot use the up-to-date `pyspark-pandas` package.
 
 ## Spark Installation Steps:
-1. Invoke `python -m venv spark-env` to create a virtual environment called `pyspark_env`.
-2. Activate the virtual environment with the following command: `source pyspark_env/bin/activate`
+Note: Please create the virtual environment outside of the project folder.
+1. Invoke `python -m venv spark-env` to create a virtual environment called `spark-env`.
+2. Activate the virtual environment with the following command: `source spark-env/bin/activate`
+- For Windows users, activate using the following command: `call call spark-env/Scripts/activate.bat`
+- To deactivate the virtual environment on Windows, simply run `deactivate`
 3. Install the dependencies using the Pipfile: `pipenv install`
-4. Zip the virtual environment using `venv-pack`: `venv-pack -o pyspark_env.tar.gz`
+4. Zip the virtual environment using `venv-pack`: `venv-pack -o spark-env.tar.gz`
+- Windows currently not supported (use WSL as a quick fix).
 5. Upload the file to HDFS, and run the following commands:
 ```
 export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./environment/bin/python
-spark-submit --archives pyspark_venv.tar.gz#environment test_process_data.py
+spark-submit --archives spark-env.tar.gz#environment test_process_data.py
 ```
 
 ## Testing:
