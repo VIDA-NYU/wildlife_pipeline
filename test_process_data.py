@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# coding: utf-8
+
 import unittest
 from etl_disk_job import ETLDiskJob
 import json

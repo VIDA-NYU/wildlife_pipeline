@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# coding: utf-8
+
 from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision.transforms import transforms
 import torch.nn as nn

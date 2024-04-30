@@ -76,7 +76,18 @@ Note: Please create the virtual environment outside of the project folder.
 3. Install the dependencies using the Pipfile: `pipenv install`
 4. Zip the virtual environment using `venv-pack`: `venv-pack -o spark-env.tar.gz`
 - Windows currently not supported (use WSL as a quick fix).
-5. Upload the file to HDFS, and run the following commands:
+5. Upload the zip file to HDFS using the following steps:
+- Compress the `wildlife_pipeline` folder using the following command:
+`zip wildlife_pipeline`
+- Upload the `wildlife_pipeline` folder to Greene:
+`gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
+- Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
+`hadoop distcp gs://nyu-dataproc-hdfs-ingest/wildlife_pipeline /user/<your_net_id>_nyu_edu`
+- Copy the files from the Hadoop cluster store in the HDFS directory to Dataproc:
+`hdfs dfs -get wildlife_pipeline.zip`
+- Unzip the `wildlife_pipeline.zip`:
+`unzip wildlife_pipeline.zip`
+5. Run the pipeline by using the following commands:
 ```
 export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./environment/bin/python
