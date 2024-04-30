@@ -15,7 +15,7 @@ fastparquet = "*"
 s3fs = "*"
 datamart-geo = "*"
 pillow = "==9.5.0"
-transformers = "==4.29.2"
+transformers = "*"
 torch = "*"
 beautifulsoup4 = "*"
 arrow = "*"
@@ -35,4 +35,4 @@ koalas = "*"
 [dev-packages]
 
 [requires]
-python_version = "3.11"
+python_version = "3.10"

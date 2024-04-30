@@ -86,3 +86,29 @@ spark-submit --archives spark-env.tar.gz#environment test_process_data.py
 ## Testing:
 1. We add a small folder called `data2` which contains a subset of the .deflate files to test the functionality on a subset of the test files.
 
+## Debugging Installation Errors:
+1. `building wheel for pillow (pyproject.toml) did not run successfully`
+this means that the versions of `pip`, `setuptools`, and `wheel` are likely the default Ubuntu 18 apt-managed versions, and require an update.
+In the virtual environment, run the following command:
+```
+python -m pip install --upgrade pip setuptools wheel
+```
+2. `python setup.py bdist_wheel did not run successfully`
+this occurs as there are some dependencies that contain native extensions that need to be compiled and linked correctly. These are likely written in C, C++ or some other languages. 
+Thus the fix is the following:
+```
+pipenv install Cmake
+```
+- If the issue still persists, you are likely on a Mac with an M1 chip. The fix is to run the following commands:
+```
+pip uninstall pillow
+brew install libjpeg
+export LDFLAGS="..."
+export CPPFLAGS="..."
+pip install pillow
+```
+3. `building wheel for tokenizers (pyproject.toml) did not run successfully ... error: can't find Rust compiler`
+install the Rust compiler with default settings:
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+## Point of Contact (PoC):
+For any issues with running the pipeline in Spark, installation issues and code issues, please open an issue or send an email to: gl1589@nyu.edu
