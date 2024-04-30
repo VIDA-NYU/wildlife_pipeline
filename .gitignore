@@ -12,3 +12,4 @@ image_data/
 myvenv/
 model/
 *.csv
+*.tar.gz
