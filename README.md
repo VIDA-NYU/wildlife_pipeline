@@ -69,6 +69,7 @@ We use the `databricks-koalas` package for the Spark migration, as it provides s
 
 ## Spark Installation Steps:
 Note: Please create the virtual environment outside of the project folder.
+- This also assumes that `pipenv` is installed. (run `pip install pipenv` if not)
 1. Invoke `python -m venv spark-env` to create a virtual environment called `spark-env`.
 2. Activate the virtual environment with the following command: `source spark-env/bin/activate`
 - For Windows users, activate using the following command: `call call spark-env/Scripts/activate.bat`
@@ -82,7 +83,7 @@ Note: Please create the virtual environment outside of the project folder.
 - Upload the `wildlife_pipeline` folder to Greene:
 `gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
 - Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
-`hadoop distcp gs://nyu-dataproc-hdfs-ingest/wildlife_pipeline /user/<your_net_id>_nyu_edu`
+`hadoop distcp gs://nyu-dataproc-hdfs-ingest/wildlife_pipeline.zip /user/<your_net_id>_nyu_edu`
 - Copy the files from the Hadoop cluster store in the HDFS directory to Dataproc:
 `hdfs dfs -get wildlife_pipeline.zip`
 - Unzip the `wildlife_pipeline.zip`:
