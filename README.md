@@ -77,9 +77,15 @@ Note: Please create the virtual environment outside of the project folder.
 3. Install the dependencies using the Pipfile: `pipenv install`
 4. Zip the virtual environment using `venv-pack`: `venv-pack -o spark-env.tar.gz`
 - Windows currently not supported (use WSL as a quick fix).
-5. Upload the zip file to HDFS using the following steps:
+5. Execute the `generate_archives_script` to allow the data files and python files to be visible by all executors:
+```
+cd scripts
+./generate_archives.sh
+```
+- After making changes to the script, ensure it is an executable by running `chmod +x generate_archives.sh`
+6. Upload the zip file to HDFS using the following steps:
 - Compress the `wildlife_pipeline` folder using the following command:
-`zip wildlife_pipeline`
+`zip -r wildlife_pipeline.zip wildlife_pipeline -x "wildlife_pipeline/.git*" "wildlife_pipeline/data*" "wildlife_pipeline/model*" "wildlife_pipeline/scrapers*"`
 - Upload the `wildlife_pipeline` folder to Greene:
 `gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
 - Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
@@ -88,11 +94,11 @@ Note: Please create the virtual environment outside of the project folder.
 `hdfs dfs -get wildlife_pipeline.zip`
 - Unzip the `wildlife_pipeline.zip`:
 `unzip wildlife_pipeline.zip`
-5. Run the pipeline by using the following commands:
+7. Run the pipeline by using the following commands:
 ```
 export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./environment/bin/python
-spark-submit --archives spark-env.tar.gz#environment test_process_data.py
+spark-submit --archives spark-env.tar.gz#environment test_process_data.py --files data_files.zip --py-files python_files.zip
 ```
 
 ## Testing:

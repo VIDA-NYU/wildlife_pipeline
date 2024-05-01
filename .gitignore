@@ -13,3 +13,4 @@ myvenv/
 model/
 *.csv
 *.tar.gz
+*.zip
