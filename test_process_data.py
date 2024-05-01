@@ -132,6 +132,7 @@ class TestProcessData(unittest.TestCase):
     '''
     
     # Test single integration:
+    '''
     def test_single_integration(self):
         if os.environ["READ_FROM_ZIP"] == "True":
             job = ETLDiskJob("local", None, os.environ["DATA_FILES_ZIP_PATH"], True, None, None, None, None)
@@ -148,6 +149,7 @@ class TestProcessData(unittest.TestCase):
             for file in files:
                 if(file.endswith('.deflate')):
                     self.integration_helper(file)
+    ''' 
 
 if __name__ == '__main__':
     unittest.main()

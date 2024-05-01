@@ -10,6 +10,8 @@ from transformers import pipeline, DistilBertTokenizer
 import logging
 import constants
 from multi_model_inference import MultiModalModel, get_inference_data, run_inference
+import zipfile
+import io
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession
@@ -173,17 +175,31 @@ class CLFJob:
             if self.minio_client:
                 model_load_path = './model.pth'
                 self.minio_client.get_model("multimodal", "model.pth", model_load_path)
-            else:
-                model_load_path = './model/model.pth'
 
             # Check device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+            
             # Load the model weights
             if device == torch.device('cpu'):
-                loaded_model.load_state_dict(torch.load(model_load_path, map_location=device), strict=False)
+                if os.environ["READ_FROM_ZIP"] == "True":
+                    with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                        if 'model/' in zip_ref.namelist():
+                            with zip_ref.open('model/model.pth', 'r') as model_file:
+                                model_content = model_file.read()
+                                loaded_model.load_state_dict(torch.load(io.BytesIO(model_content), map_location=device), strict=False)
+                                print("Model state dictionary loaded successfully.")
+                else:
+                    loaded_model.load_state_dict(torch.load(model_load_path, map_location=device), strict=False)
             else:
-                loaded_model.load_state_dict(torch.load(model_load_path), strict=False)
+                if os.environ["READ_FROM_ZIP"] == "True":
+                    with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                        if 'model/' in zip_ref.namelist():
+                            with zip_ref.open('model/model.pth', 'r') as model_file:
+                                model_content = model_file.read()
+                                loaded_model.load_state_dict(torch.load(io.BytesIO(model_content)), strict=False)
+                                print("Model state dictionary loaded successfully.")
+                else:
+                    loaded_model.load_state_dict(torch.load(model_load_path), strict=False)
 
             # Move model to evaluation mode and to the device
             loaded_model.eval()

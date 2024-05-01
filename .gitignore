@@ -14,3 +14,4 @@ model/
 *.csv
 *.tar.gz
 *.zip
+.DS_Store

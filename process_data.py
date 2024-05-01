@@ -21,6 +21,7 @@ import uuid
 import os
 import shutil
 import tempfile
+import zipfile
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession
@@ -92,10 +93,19 @@ class ProcessData:
                 scraper = pickle.load(obj)
                 self.domains[domain] = scraper
                 logging.info(f"{domain} MLscraper loaded")
-            elif os.path.exists("scrapers/"):
-                scraper = pickle.load("scrapers/scraper_" + domain)
-                self.domains[domain] = scraper
-                logging.info(f"{domain} MLscraper loaded")
+            elif os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                    if 'scrapers/' in zip_ref.namelist():
+                        with zip_ref.open('scrapers/scraper_' + domain, 'r') as pickle_file:
+                            pickle_content = pickle_file.read()
+                            scraper = pickle.loads(pickle_content)
+                            self.domains[domain] = scraper
+                            logging.info(f"{domain} MLscraper loaded")
+            else: # os.environ["READ_FROM_ZIP"] == "False"
+                if os.path.exists("scrapers/"):
+                    scraper = pickle.load("scrapers/scraper_" + domain)
+                    self.domains[domain] = scraper
+                    logging.info(f"{domain} MLscraper loaded")
         return self.domains[domain]
 
     @staticmethod

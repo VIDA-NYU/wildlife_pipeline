@@ -19,6 +19,7 @@ import chardet
 import logging
 import constants
 import pybase64
+import zipfile # For reading data on Spark
 
 # Spark-related import statements
 from pyspark.sql import SparkSession, DataFrame
