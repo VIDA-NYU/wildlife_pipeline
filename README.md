@@ -85,7 +85,7 @@ cd scripts
 - After making changes to the script, ensure it is an executable by running `chmod +x generate_archives.sh`
 6. Upload the zip file to HDFS using the following steps:
 - Compress the `wildlife_pipeline` folder using the following command:
-`zip -r wildlife_pipeline.zip wildlife_pipeline -x "wildlife_pipeline/.git*" "wildlife_pipeline/data*" "wildlife_pipeline/model*" "wildlife_pipeline/scrapers*"`
+`zip -r wildlife_pipeline.zip wildlife_pipeline -x "wildlife_pipeline/.git*" "wildlife_pipeline/data" "wildlife_pipeline/data2 "wildlife_pipeline/model*" "wildlife_pipeline/scrapers*"`
 - Upload the `wildlife_pipeline` folder to Greene:
 `gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
 - Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
