@@ -6,10 +6,12 @@ from minio.error import S3Error
 import pickle
 import yaml
 import databricks.koalas as ks
+import zipfile
+import os
 
 class MinioClient:
     def __init__(self, access_key: str, secret_access_key: str):
-        self.config = yaml.safe_load(open("config.yml"))
+        self.config = self.load_yaml_config()
         self.access_key = access_key
         self.secret_key = secret_access_key
         self.client = Minio(
@@ -17,6 +19,36 @@ class MinioClient:
             access_key=access_key,
             secret_key=secret_access_key,
             secure=False)
+    
+    def load_yaml_config(self) -> Optional[dict]:
+        """
+        Load YAML configuration from a file.
+        1. File can be in Zip file if run on Spark
+        2. File can be same directory if run locally.
+
+        Returns:
+            dict: The configuration loaded from the YAML file, or None if the file is not found.
+        """
+        
+        try:
+            if os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], "r") as zip_ref:
+                    if 'config.yml' in zip_ref.namelist():
+                        with zip_ref.open(config.yml, "r") as config_file:
+                            yaml_content = config_file.read()
+                            config = yaml.safe_load(yaml_content.decode("utf-8"))
+                            return config
+                    else:
+                        print("config.yml not found in the zip archive.")
+                        return None
+            else:
+                with open('config.yml', "r") as config_file:
+                    yaml_content = config_file.read()
+                    config = yaml.safe_load(yaml_content)
+                    return config
+        except Exception as e:
+            print(f"Error loading YAML config from zip: {e}")
+            return None
 
     def get_storage_options(self) -> dict:
         return {"key": self.access_key,

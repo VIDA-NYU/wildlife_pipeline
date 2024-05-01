@@ -20,6 +20,7 @@ import logging
 import constants
 import pybase64
 import zipfile # For reading data on Spark
+import io
 
 # Spark-related import statements
 from pyspark.sql import SparkSession, DataFrame
@@ -48,10 +49,21 @@ class ETLDiskJob(ProcessData):
         # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
 
     def get_files(self):
+        """
+        Returns a list of files that the ETL pipeline will run on.
+        There are two possibile configurations when fetching these files:
+        1. ETL pipeline is being run locally, in which the data/ directory needs to be read.
+        2. ETL pipeline is being run on Spark, in which the data/ directory within the data_files.zip needs to be read.
+        """
         try:
-            files = os.listdir(self.path)
-            files= [file for file in files if file.endswith(".deflate")]
-            logging.info(f"{len(files)} files to be processed")
+            if os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(self.path, "r") as zip_ref:
+                    files = [file for file in zip_ref.namelist() if file.startswith('data/')]                
+                    logging.info(f"{len(files)} files to be processed")
+            else:
+                files = os.listdir(self.path)
+                files= [file for file in files if file.endswith(".deflate")]
+                logging.info(f"{len(files)} files to be processed")
         except FileNotFoundError:
             logging.error(f"No files on {self.path}")
             return None
@@ -74,14 +86,13 @@ class ETLDiskJob(ProcessData):
             for file in files:
                 logging.info(f"Starting processing file {file}")
                 final_filename = f"{folder_name}{file.split('.')[0]}"
-                
                 # Check if the file has already been processed and stored
                 if self.minio_client:
                     checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
                 else:
                     checked_obj = False
 
-                if not checked_obj:
+                if not checked_obj:                        
                     cached = []
                     processed = []
                     decompressed_data = self.get_decompressed_file(file)
@@ -307,15 +318,27 @@ class ETLDiskJob(ProcessData):
         log_processed(hits, count)
 
     def get_decompressed_file(self, file):
-        print(f"FILE PATH {os.path.abspath(file)}")
-        with open(f"{self.path}{file}", "rb") as f:
-            decompressor = zlib.decompressobj()
-            decompressed_data = decompressor.decompress(f.read())
-            logging.info(f"file {file} decompressed")
-            file_size = len(decompressed_data)
-            logging.info(f"The size of the decompressed file is {file_size} bytes")
+        if os.environ["READ_FROM_ZIP"] == "True":
+            with zipfile.ZipFile(self.path, "r") as zip_ref:
+                with zip_ref.open(file, "rb") as compressed_file:
+                    decompressed_data = self.decompress_helper(file, compressed_file)
+        else:
+            print(f"FILE PATH {os.path.abspath(file)}")
+            with open(f"{self.path}{file}", "rb") as f:
+                decompressed_data = self.decompress_helper(file, f)
+                
         return decompressed_data
 
+    def decompress_helper(self, file, deflate_file):
+        decompressor = zlib.decompressobj()
+        decompressed_data = decompressor.decompress(deflate_file.read())
+        logging.info(f"file {file} decompressed from zip archive")
+        file_size = len(decompressed_data)
+        logging.info(f"The size of the decompressed file {file} is {file_size} bytes")
+
+        return decompressed_data
+
+    
     @staticmethod
     def get_decoded_html_from_bytes(content):
         try:
