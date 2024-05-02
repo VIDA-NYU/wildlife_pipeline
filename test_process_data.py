@@ -1,8 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # coding: utf-8
 
 import os
-from pyspark import SparkFiles
+
 from pyspark.sql import SparkSession
 import unittest
 
@@ -17,15 +17,15 @@ def setup_environment():
         spark = SparkSession.builder.getOrCreate()
 
         # Add a file to distribute to worker nodes
-        spark.sparkContext.addFile("data_files.zip")
-        spark.sparkContext.addFile("python_files.zip")
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
         read_from_zip = True    
 
     # Set environment variables:
     os.environ["READ_FROM_ZIP"] = str(read_from_zip)
-    
-    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if read_from_zip else "NOT FOUND"
-    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if read_from_zip else "NOT FOUND"
+
+    os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if read_from_zip else "NOT FOUND"
+    os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if read_from_zip else "NOT FOUND"
 
 class TestProcessData(unittest.TestCase):
     setup_environment()

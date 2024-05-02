@@ -68,9 +68,11 @@ We follow the [PEP 257 - Docstring Convention for Python Docstrings](https://pep
 We use the `databricks-koalas` package for the Spark migration, as it provides seemless integration of the Pandas API for Spark. As the version of Spark on Dataproc is 3.2, we cannot use the up-to-date `pyspark-pandas` package.
 
 ## Spark Installation Steps:
+Remember to update the `HDFS URI`, with your netid.
 Note: Please create the virtual environment outside of the project folder.
 - This also assumes that `pipenv` is installed. (run `pip install pipenv` if not)
 1. Invoke `python3.8 -m venv spark-env` to create a virtual environment called `spark-env`.
+- If python3.8 is not installed, run `brew install python@3.8`
 2. Activate the virtual environment with the following command: `source spark-env/bin/activate`
 - For Windows users, activate using the following command: `call call spark-env/Scripts/activate.bat`
 - To deactivate the virtual environment on Windows, simply run `deactivate`
@@ -98,7 +100,12 @@ cd scripts
 ```
 export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./environment/bin/python
-spark-submit --archives spark-env.tar.gz#environment test_process_data.py --files /home/gl1589_nyu_edu/wildlife_pipeline/data_files.zip --py-files /home/gl1589_nyu_edu/wildlife_pipeline/python_files.zip
+hdfs dfs -put data_files.zip
+hdfs dfs -put python_files.zip
+spark-submit --archives spark-env.tar.gz#environment \
+             --files hdfs://nyu-dataproc-m:8020/user/<your_net_id>_nyu_edu/data_files.zip \
+             --py-files hdfs://nyu-dataproc-m:8020/user/<your_net_id>_nyu_edu/python_files.zip \
+             test_process_data.py
 ```
 8. When changes are made to any of the files, navigate to the `scripts/` directory and run the following:
 ```

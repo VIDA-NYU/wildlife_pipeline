@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # coding: utf-8
 
 from typing import Any, Optional
@@ -6,18 +6,18 @@ import zlib
 import json
 import pandas as pd
 import os
-from pyspark import SparkFiles
+
 from pyspark.sql import SparkSession
 
 if os.environ["READ_FROM_ZIP"] == "True":
     # Initialize SparkSession (or SparkContext)
     spark = SparkSession.builder.getOrCreate()
     # Add a file to distribute to worker nodes
-    spark.sparkContext.addFile("data_files.zip")
-    spark.sparkContext.addFile("python_files.zip")
-    
-os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
-os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+    spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+
+os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
 
 # Now imports should be fine
 from bloom_filter import BloomFilter
@@ -65,7 +65,7 @@ class ETLDiskJob(ProcessData):
         Returns a list of files that the ETL pipeline will run on.
         There are two possibile configurations when fetching these files:
         1. ETL pipeline is being run locally, in which the data/ directory needs to be read.
-        2. ETL pipeline is being run on Spark, in which the data/ directory within the data_files.zip needs to be read.
+        2. ETL pipeline is being run on Spark, in which the data/ directory within the hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip needs to be read.
         """
         try:
             if os.environ["READ_FROM_ZIP"] == "True":

@@ -1,3 +1,4 @@
+#!/bin/bash
 cd ../../
 rm wildlife_pipeline.zip
 cd wildlife_pipeline
