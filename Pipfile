@@ -10,7 +10,6 @@ pybloom = {git = "git+https://github.com/jaybaird/python-bloomfilter.git#egg=pyb
 extruct = "==0.14.0"
 minio = "==7.1.14"
 pyarrow = "*"
-mlscraper = {git = "git+https://github.com/lorey/mlscraper#egg=mlscraper"}
 fastparquet = "*"
 s3fs = "*"
 datamart-geo = "*"
@@ -27,7 +26,6 @@ ftfy = "*"
 pybase64 = "*"
 torchvision = "*"
 lxml = "<5.1.1"
-pyspark = "*"
 virtualenv = "*"
 venv-pack = "*"
 koalas = "*"
@@ -35,4 +33,4 @@ koalas = "*"
 [dev-packages]
 
 [requires]
-python_version = "3.10"
+python_version = "3.8"

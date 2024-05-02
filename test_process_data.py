@@ -3,34 +3,32 @@
 
 import os
 from pyspark import SparkFiles
-
-read_from_zip = False
-# Check if the local 'data/' directory exists
-local_data_dir = "data/"
-if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
-    read_from_zip = False
-else:
-    read_from_zip = True    
-
-# Set environment variables:
-os.environ["READ_FROM_ZIP"] = str(read_from_zip)
-# Access the path of the zip file distributed with --files
-os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if read_from_zip else None
-os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if read_from_zip else None
-
-# Now imports should be fine
+from pyspark.sql import SparkSession
 import unittest
-from etl_disk_job import ETLDiskJob
-import json
-import time
-import pandas as pd
-import chardet
-import pybase64
-import zipfile
-import io
 
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data/"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        read_from_zip = False
+    else:
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
+
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("data_files.zip")
+        spark.sparkContext.addFile("python_files.zip")
+        read_from_zip = True    
+
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+    
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if read_from_zip else "NOT FOUND"
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if read_from_zip else "NOT FOUND"
 
 class TestProcessData(unittest.TestCase):
+    setup_environment()
 
     # Helper functions to process data
     def process_data_helper(self, job, file, job_type):
@@ -39,9 +37,20 @@ class TestProcessData(unittest.TestCase):
         for line in decompressed_file.splitlines():
             json_doc = json.loads(line)
             cached.append(json_doc)
-        match job_type:
-            case "EXTRACT": job.extract(cached)
-            case "TRANSFORM": df = job.create_df(cached)
+        if job_type == "EXTRACT":
+            job.extract(cached)
+        elif job_type == "TRANSFORM": 
+            df = job.create_df(cached)
+   
+    # Now imports should be fine
+    from etl_disk_job import ETLDiskJob
+    import json
+    import time
+    import pandas as pd
+    import chardet
+    import pybase64
+    import zipfile
+    import io
 
     def classification_helper(self, df):
         df = df[0:100]

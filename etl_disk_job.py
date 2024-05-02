@@ -6,7 +6,20 @@ import zlib
 import json
 import pandas as pd
 import os
+from pyspark import SparkFiles
+from pyspark.sql import SparkSession
 
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("data_files.zip")
+    spark.sparkContext.addFile("python_files.zip")
+    
+os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
+# Now imports should be fine
 from bloom_filter import BloomFilter
 from process_data import ProcessData
 import base64
@@ -14,13 +27,12 @@ from urllib.parse import urlparse
 import arrow
 from bs4 import BeautifulSoup
 import extruct
-from mlscraper.html import Page
+from mlscraper import Page
 import chardet
 import logging
 import constants
 import pybase64
 import zipfile # For reading data on Spark
-import io
 
 # Spark-related import statements
 from pyspark.sql import SparkSession, DataFrame
@@ -326,7 +338,7 @@ class ETLDiskJob(ProcessData):
             print(f"FILE PATH {os.path.abspath(file)}")
             with open(f"{self.path}{file}", "rb") as f:
                 decompressed_data = self.decompress_helper(file, f)
-                
+
         return decompressed_data
 
     def decompress_helper(self, file, deflate_file):

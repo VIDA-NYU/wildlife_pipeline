@@ -70,7 +70,7 @@ We use the `databricks-koalas` package for the Spark migration, as it provides s
 ## Spark Installation Steps:
 Note: Please create the virtual environment outside of the project folder.
 - This also assumes that `pipenv` is installed. (run `pip install pipenv` if not)
-1. Invoke `python -m venv spark-env` to create a virtual environment called `spark-env`.
+1. Invoke `python3.8 -m venv spark-env` to create a virtual environment called `spark-env`.
 2. Activate the virtual environment with the following command: `source spark-env/bin/activate`
 - For Windows users, activate using the following command: `call call spark-env/Scripts/activate.bat`
 - To deactivate the virtual environment on Windows, simply run `deactivate`
@@ -85,7 +85,7 @@ cd scripts
 - After making changes to the script, ensure it is an executable by running `chmod +x generate_archives.sh`
 6. Upload the zip file to HDFS using the following steps:
 - Compress the `wildlife_pipeline` folder using the following command:
-`zip -r wildlife_pipeline.zip wildlife_pipeline -x "wildlife_pipeline/.git*" "wildlife_pipeline/data" "wildlife_pipeline/data2 "wildlife_pipeline/model*" "wildlife_pipeline/scrapers*"`
+`zip -r wildlife_pipeline.zip wildlife_pipeline -x "wildlife_pipeline/.git*" "wildlife_pipeline/data" "wildlife_pipeline/data2" "wildlife_pipeline/model*" "wildlife_pipeline/scrapers*"`
 - Upload the `wildlife_pipeline` folder to Greene:
 `gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
 - Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
@@ -98,8 +98,16 @@ cd scripts
 ```
 export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./environment/bin/python
-spark-submit --archives spark-env.tar.gz#environment test_process_data.py --files data_files.zip --py-files python_files.zip
+spark-submit --archives spark-env.tar.gz#environment test_process_data.py --files /home/gl1589_nyu_edu/wildlife_pipeline/data_files.zip --py-files /home/gl1589_nyu_edu/wildlife_pipeline/python_files.zip
 ```
+8. When changes are made to any of the files, navigate to the `scripts/` directory and run the following:
+```
+./clear_archives.sh
+./generate_archives.sh
+```
+- `clear_archives.sh` will delete the zip files and the tar.gz file. 
+- `generate_archives.sh` will regenerate the zip files and tar.gz file
+- Then repeat steps 6 and 7 to deploy to spark.
 
 ## Testing:
 1. We add a small folder called `data2` which contains a subset of the .deflate files to test the functionality on a subset of the test files.

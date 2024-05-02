@@ -3,12 +3,25 @@
 
 import logging
 from typing import Dict, List, Optional
+from pyspark import SparkFiles
+import os
+from pyspark.sql import SparkSession
+
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("data_files.zip")
+    spark.sparkContext.addFile("python_files.zip")
+    
+os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
 
 import datamart_geo
 from io import BytesIO
 
 from bs4 import BeautifulSoup
-from mlscraper.html import Page
+from mlscraper import Page
 import numpy as np
 from numpy import asarray
 import pandas as pd
@@ -18,7 +31,6 @@ from typing import Any
 import re
 import pickle
 import uuid
-import os
 import shutil
 import tempfile
 import zipfile

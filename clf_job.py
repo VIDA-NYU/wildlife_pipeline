@@ -9,6 +9,19 @@ import os
 from transformers import pipeline, DistilBertTokenizer
 import logging
 import constants
+from pyspark import SparkFiles
+from pyspark.sql import SparkSession
+
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("data_files.zip")
+    spark.sparkContext.addFile("python_files.zip")
+
+os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
 from multi_model_inference import MultiModalModel, get_inference_data, run_inference
 import zipfile
 import io
