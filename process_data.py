@@ -3,7 +3,24 @@
 
 import logging
 from typing import Dict, List, Optional
+<<<<<<< HEAD
 import os
+=======
+
+import os
+from pyspark.sql import SparkSession
+
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+    spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+    
+os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d
 import datamart_geo
 from io import BytesIO
 from bs4 import BeautifulSoup
@@ -20,6 +37,10 @@ import uuid
 import shutil
 import tempfile
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+import zipfile
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession

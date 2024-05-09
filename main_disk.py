@@ -3,6 +3,18 @@
 
 import argparse
 import os
+
+from pyspark.sql import SparkSession
+
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+    spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
 from etl_disk_job import ETLDiskJob
 from minio_client import MinioClient
 from bloom_filter import BloomFilter

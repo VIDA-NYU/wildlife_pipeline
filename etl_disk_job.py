@@ -80,13 +80,10 @@ class ETLDiskJob(ProcessData):
             if os.environ["READ_FROM_ZIP"] == "True":
                 with zipfile.ZipFile(self.path, "r") as zip_ref:
                     files = [file for file in zip_ref.namelist() if file.startswith('data/')]
-
-                    print(f'FILES: {files}')
                     logging.info(f"{len(files)} files to be processed")
             else:
                 files = os.listdir(self.path)
                 files= [file for file in files if file.endswith(".deflate")]
-                print(f'LOCAL RUN: {files}')
                 logging.info(f"{len(files)} files to be processed")
         except FileNotFoundError:
             logging.error(f"No files on {self.path}")

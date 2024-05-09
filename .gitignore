@@ -12,3 +12,6 @@ image_data/
 myvenv/
 model/
 *.csv
+*.tar.gz
+*.zip
+.DS_Store

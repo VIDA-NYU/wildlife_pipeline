@@ -1,5 +1,6 @@
 #!/bin/bash
 cd ..
+<<<<<<< HEAD
 #export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
 export PYSPARK_PYTHON=./spark-env/bin/python
 hdfs dfs -put data_files.zip
@@ -39,3 +40,13 @@ spark-submit \
     --conf "spark.executorEnv.PYARROW_IGNORE_TIMEZONE=true" \
     --conf "spark.driverEnv.PYARROW_IGNORE_TIMEZONE=true" \
     test_process_data.py
+=======
+export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
+export PYSPARK_PYTHON=./environment/bin/python
+hdfs dfs -put data_files.zip
+hdfs dfs -put python_files.zip
+spark-submit --archives spark-env.tar.gz#environment \
+             --files hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip \
+             --py-files hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip \
+             test_process_data.py
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d

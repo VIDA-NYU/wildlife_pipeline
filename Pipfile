@@ -35,4 +35,7 @@ torchaudio = "*"
 
 [requires]
 python_version = "3.8"
+<<<<<<< HEAD
 torch = ">=2.0.0, !=2.0.1, !=2.1.0"
+=======
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d
