@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 classifier_target_labels = ["a real animal",
                             "a toy",
                             "a print of an animal",

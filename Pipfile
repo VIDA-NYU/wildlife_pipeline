@@ -10,13 +10,11 @@ pybloom = {git = "git+https://github.com/jaybaird/python-bloomfilter.git#egg=pyb
 extruct = "==0.14.0"
 minio = "==7.1.14"
 pyarrow = "*"
-mlscraper = {git = "git+https://github.com/lorey/mlscraper#egg=mlscraper"}
 fastparquet = "*"
 s3fs = "*"
 datamart-geo = "*"
 pillow = "==9.5.0"
-transformers = "==4.29.2"
-torch = "*"
+transformers = "*"
 beautifulsoup4 = "*"
 arrow = "*"
 psutil = "*"
@@ -27,8 +25,14 @@ ftfy = "*"
 pybase64 = "*"
 torchvision = "*"
 lxml = "<5.1.1"
+virtualenv = "*"
+venv-pack = "*"
+koalas = "*"
+torch = "*"
+torchaudio = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.11"
+python_version = "3.8"
+torch = ">=2.0.0, !=2.0.1, !=2.1.0"
