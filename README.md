@@ -67,24 +67,58 @@ We follow the [PEP 257 - Docstring Convention for Python Docstrings](https://pep
 
 We use the `databricks-koalas` package for the Spark migration, as it provides seemless integration of the Pandas API for Spark. As the version of Spark on Dataproc is 3.2, we cannot use the up-to-date `pyspark-pandas` package.
 
+
+
 ## Spark Installation Steps:
+Remember to update the `HDFS URIs`, and all other references to net ids are updated with your netid. 
 Note: Please create the virtual environment outside of the project folder.
-1. Invoke `python -m venv spark-env` to create a virtual environment called `spark-env`.
-2. Activate the virtual environment with the following command: `source spark-env/bin/activate`
-- For Windows users, activate using the following command: `call call spark-env/Scripts/activate.bat`
-- To deactivate the virtual environment on Windows, simply run `deactivate`
-3. Install the dependencies using the Pipfile: `pipenv install`
-4. Zip the virtual environment using `venv-pack`: `venv-pack -o spark-env.tar.gz`
-- Windows currently not supported (use WSL as a quick fix).
-5. Upload the file to HDFS, and run the following commands:
+- This also assumes that `pipenv` is installed. (run `pip install pipenv` if not)
+1. Navigate to the `wildlife-pipeline/scripts` folder.
+2. Execute the `generate_archives_script`: 
 ```
-export PYSPARK_DRIVER_PYTHON=python # Do not set in cluster modes.
-export PYSPARK_PYTHON=./environment/bin/python
-spark-submit --archives spark-env.tar.gz#environment test_process_data.py
+./generate_archives.sh
 ```
+- It will to generate the `data_files.zip`, `python_files.zip` and `wildlife_pipeline.zip` folder
+- Upload the `wildlife_pipeline` folder to Greene via the following command: `gsutil cp wildlife_pipeline.zip  gs://nyu-dataproc-hdfs-ingest`
+3. Getting the `wildlife-pipeline` onto HDFS:
+- Run the following from within Dataproc to ingest the dataset into your HDFS home directory:
+`hadoop distcp gs://nyu-dataproc-hdfs-ingest/wildlife_pipeline.zip /user/<your_net_id>_nyu_edu`
+- This will retrieve the `wildlife_pipeline.zip` file from Greene and place it into HDFS.
+- Copy the files from the Hadoop cluster store in the HDFS directory to Dataproc:
+`hdfs dfs -get wildlife_pipeline.zip`
+- Unzip the `wildlife_pipeline.zip`:
+`unzip wildlife_pipeline.zip` 
+
+4. Creating the virtual environment:
+- Invoke `python3.8 -m venv spark-env` to create a virtual environment called `spark-env`.
+- Activate the virtual environment with the following command: `source spark-env/bin/activate`
+- Install the dependencies using the Pipfile: `pipenv install`
+- Please note that `torch = ">=2.0.0, !=2.0.1, !=2.1.0"` is to install CUDA dependencies to the virtual env.
+- `pandas==1.5.3` and `numpy==1.23.1` are the compatible versions with `databricks-koalas`.
+5. Zip the virtual environment using `venv-pack`: `venv-pack -o spark-env.tar.gz`
+6. Run the pipeline by using the following commands:
+- Navigate to the `wildlife_pipeline/scripts` directory
+- Execute the `run_spark.sh` script. Please note that the configuration will need to be changed if there is a TIMEOUT.
+7. When changes are made to any of the files, navigate to the `scripts/` directory and run the following:
+```
+chmod +x *.sh
+./clear_archives.sh
+./remove_hdfs_zip.sh
+./generate_archives.sh
+./run_spark.sh
+```
+- `clear_archives.sh` will delete the zip files.
+- `remove_hdfs_zip.sh` will remove the zip files on HDFS. 
+- `generate_archives.sh` will regenerate the zip files.
+- `run_spark.sh` will move the zip files from `generate_archives.sh` to HDFS.
 
 ## Testing:
-1. We add a small folder called `data2` which contains a subset of the .deflate files to test the functionality on a subset of the test files.
+1. We created a script called `create_tiny_deflate.py` to take an existing .deflate file and only get the first N lines and place it into a folder called `tiny-data`.
+
+2. We also leverage local mode, and use the `run_spark_local.sh` script to execute the pipeline locally for spark.
+
+3. It is difficult to debug lots of these errors. We recommend to first run `create_tiny_deflate.py` and update `test_process_data.py` to run on the tiny deflate file. 
+- If there are timeouts, we need to increase the number of executors, parallelism and memory per executor.
 
 ## Debugging Installation Errors:
 1. `building wheel for pillow (pyproject.toml) did not run successfully`

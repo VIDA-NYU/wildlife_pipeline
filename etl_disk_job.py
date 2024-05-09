@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 from typing import Any, Optional
 import zlib
 import json
 import pandas as pd
 import os
-
 from bloom_filter import BloomFilter
 from process_data import ProcessData
 import base64
@@ -11,14 +13,16 @@ from urllib.parse import urlparse
 import arrow
 from bs4 import BeautifulSoup
 import extruct
-from mlscraper.html import Page
+from mlscraper import Page
 import chardet
 import logging
 import constants
 import pybase64
+import zipfile 
 
 # Spark-related import statements
 from pyspark.sql import SparkSession, DataFrame
+from pyspark import SparkFiles
 import databricks.koalas as ks
 # import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
 
@@ -28,7 +32,28 @@ from create_metadata import (
     get_dict_json_ld,
     get_dict_microdata
 )
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        print("READING DATA FOLDER!")
+        read_from_zip = False
+    else:
+        print("IT AINT THERE")
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
 
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+        read_from_zip = True    
+
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+setup_environment()
 class ETLDiskJob(ProcessData):
     def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
                  model: str, bloom_filter: Optional[BloomFilter]):
@@ -40,14 +65,29 @@ class ETLDiskJob(ProcessData):
         self.task = task
         self.spark = SparkSession.builder.getOrCreate() # Default settings
         ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
+        ks.set_option('compute.ops_on_diff_frames', True)
         # ppd.enable_pandas_on_spark_session(self.spark) # Enable pyspark.pandas support
         # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
 
     def get_files(self):
+        """
+        Returns a list of files that the ETL pipeline will run on.
+        There are two possibile configurations when fetching these files:
+        1. ETL pipeline is being run locally, in which the data/ directory needs to be read.
+        2. ETL pipeline is being run on Spark, in which the data/ directory within the hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip needs to be read.
+        """
         try:
-            files = os.listdir(self.path)
-            files= [file for file in files if file.endswith(".deflate")]
-            logging.info(f"{len(files)} files to be processed")
+            if os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(self.path, "r") as zip_ref:
+                    files = [file for file in zip_ref.namelist() if file.startswith('data/')]
+
+                    print(f'FILES: {files}')
+                    logging.info(f"{len(files)} files to be processed")
+            else:
+                files = os.listdir(self.path)
+                files= [file for file in files if file.endswith(".deflate")]
+                print(f'LOCAL RUN: {files}')
+                logging.info(f"{len(files)} files to be processed")
         except FileNotFoundError:
             logging.error(f"No files on {self.path}")
             return None
@@ -70,14 +110,13 @@ class ETLDiskJob(ProcessData):
             for file in files:
                 logging.info(f"Starting processing file {file}")
                 final_filename = f"{folder_name}{file.split('.')[0]}"
-                
                 # Check if the file has already been processed and stored
                 if self.minio_client:
                     checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
                 else:
                     checked_obj = False
 
-                if not checked_obj:
+                if not checked_obj:                        
                     cached = []
                     processed = []
                     decompressed_data = self.get_decompressed_file(file)
@@ -85,14 +124,17 @@ class ETLDiskJob(ProcessData):
                     # Process each line as a separate JSON document
                     for line in decompressed_data.splitlines():
                         json_doc = json.loads(line)
+                        #print(f"LOADING: {json_doc}")
                         cached.append(json_doc)
                         if len(cached) == 5000:
-                            processed_df = self.extract_information_from_docs(ks.DataFrame(cached))
+                            #processed_df = ks.DataFrame(cached)
+                            processed_df = self.extract_information_from_docs(cached)
                             processed.append(processed_df)
                             cached = []
 
                     if cached:
-                        processed_df = self.extract_information_from_docs(ks.DataFrame(cached))
+                        #processed_df = ks.DataFrame(cached)
+                        processed_df = self.extract_information_from_docs(cached)
                         processed.append(processed_df)
 
                     if processed:
@@ -104,7 +146,13 @@ class ETLDiskJob(ProcessData):
                         if self.minio_client:
                             self.load_file_to_minio(final_filename, processed_df.to_pandas())  # Converting to pandas for compatibility
                         else:
-                            processed_df.to_csv(f"{final_filename}.csv", index=False)
+                            # Loop through each column
+                            for col_name in processed_df.columns:
+                            # Check if the column has null values
+                                if processed_df[col_name].isnull().any():
+                                # Cast the column to string type
+                                    processed_df[col_name] = processed_df[col_name].astype("string")
+                            processed_df.to_pandas().to_csv(f"{final_filename}.csv", index=False)
 
                         # Further processing if images need to be saved
                         if self.save_image:
@@ -115,7 +163,8 @@ class ETLDiskJob(ProcessData):
                                 if self.minio_client:
                                     self.load_file_to_minio(final_filename, processed_df.to_pandas())
                                 else:
-                                    processed_df.to_csv(f"{final_filename}.csv", index=False)
+                                    print("Got to classification job.")
+                                    processed_df.to_pandas().to_csv(f"{final_filename}.csv", index=False)
                 else:
                     df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
                     if "image_path" not in df.columns:
@@ -242,11 +291,11 @@ class ETLDiskJob(ProcessData):
                     metadata = None
         if final_dict:
             # Creating a Koalas DataFrame from the list of dictionaries
-            df_metas = ks.DataFrame(final_dict)
+            df_metas = pd.DataFrame(final_dict)
 
             # Converting price and currency using user-defined functions or direct lambda functions
-            df_metas['price'] = df_metas['price'].apply(lambda x: ProcessData.fix_price_str(x) if x else None, dtype=str)
-            df_metas['currency'] = df_metas['currency'].apply(lambda x: ProcessData.fix_currency(x) if x else None, dtype=str)
+            df_metas['price'] = df_metas['price'].apply(lambda x: ProcessData.fix_price_str(x))
+            df_metas['currency'] = df_metas['currency'].apply(lambda x: ProcessData.fix_currency(x))
             
             # Grouping and aggregation in Koalas
             df_metas = df_metas.groupby('url').agg({
@@ -272,10 +321,10 @@ class ETLDiskJob(ProcessData):
             df_metas = self.assert_types(df_metas)
             columns_to_fix = ["title", "text", "name", "description"]
             for column in columns_to_fix:
-                df_metas[column] = df_metas[column].astype(str).apply(lambda x: self.maybe_fix_text(x) if x else None, dtype=str)
+                df_metas[column] = df_metas[column].astype(str).apply(lambda x: self.maybe_fix_text(x) if x else None)
 
-            return df_metas
-
+            return ks.DataFrame(df_metas)
+            
         return ks.DataFrame()
     
     def extract(self, result: list):
@@ -303,15 +352,29 @@ class ETLDiskJob(ProcessData):
         log_processed(hits, count)
 
     def get_decompressed_file(self, file):
-        print(f"FILE PATH {os.path.abspath(file)}")
-        with open(f"{self.path}{file}", "rb") as f:
-            decompressor = zlib.decompressobj()
-            decompressed_data = decompressor.decompress(f.read())
-            logging.info(f"file {file} decompressed")
-            file_size = len(decompressed_data)
-            logging.info(f"The size of the decompressed file is {file_size} bytes")
+        if os.environ.get("READ_FROM_ZIP") == "True":
+            with zipfile.ZipFile(self.path, "r") as zip_ref:
+                with zip_ref.open(file, "r") as compressed_file:
+                    decompressed_data = self.decompress_helper(file, compressed_file)
+        else:
+            file_path = os.path.join(self.path, file)
+            # Check if the file exists
+            if os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    decompressed_data = self.decompress_helper(file, f)
+            else:
+                return None
+
         return decompressed_data
 
+    def decompress_helper(self, file, deflate_file):
+        decompressor = zlib.decompressobj()
+        decompressed_data = decompressor.decompress(deflate_file.read())
+        logging.info(f"file {file} decompressed from zip archive")
+        file_size = len(decompressed_data)
+        logging.info(f"The size of the decompressed file {file} is {file_size} bytes")
+        return decompressed_data
+    
     @staticmethod
     def get_decoded_html_from_bytes(content):
         try:

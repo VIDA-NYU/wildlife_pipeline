@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
+import os
 from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision.transforms import transforms
 import torch.nn as nn
@@ -9,9 +13,11 @@ from torchvision import models
 import torch.nn.functional as F
 from io import BytesIO
 import logging
-
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
+torch.hub.set_dir('hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu')
+os.environ["TRANSFORMERS_CACHE"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu"
 
 # We will first prepare the dataset for inference
 class InferenceDataset(Dataset):
@@ -61,7 +67,7 @@ class InferenceDataset(Dataset):
         }
 
 
-text = DistilBertModel.from_pretrained('distilbert-base-uncased')
+text = DistilBertModel.from_pretrained('distilbert-base-uncased', cache_dir=os.environ["TRANSFORMERS_CACHE"])
 
 img = models.efficientnet_v2_m(pretrained=True)
 
@@ -195,7 +201,7 @@ def get_inference_data(dataset, minio_client, bucket_name):
     MAX_LEN = 128
     BATCH_SIZE = 16
 
-    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased', cache_dir=os.environ["TRANSFORMERS_CACHE"])
     transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),

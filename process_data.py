@@ -1,11 +1,13 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 import logging
 from typing import Dict, List, Optional
-
+import os
 import datamart_geo
 from io import BytesIO
-
 from bs4 import BeautifulSoup
-from mlscraper.html import Page
+from mlscraper import Page
 import numpy as np
 from numpy import asarray
 import pandas as pd
@@ -15,9 +17,9 @@ from typing import Any
 import re
 import pickle
 import uuid
-import os
 import shutil
 import tempfile
+<<<<<<< HEAD
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession
@@ -25,6 +27,36 @@ from pyspark.sql import SparkSession
 # from pyspark.sql.functions import udf, when, col
 # import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
 import databricks.koalas as ks
+=======
+import zipfile
+
+# Spark-related import statements:
+from pyspark.sql import SparkSession
+from pyspark import SparkFiles
+# import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
+import databricks.koalas as ks
+
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data/"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        read_from_zip = False
+    else:
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
+
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+        read_from_zip = True
+
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+>>>>>>> gl1589-branch
 
 from create_metadata import (
     open_scrap,
@@ -38,6 +70,7 @@ import extruct
 import constants
 import ftfy
 
+<<<<<<< HEAD
 geo_data = datamart_geo.GeoData.download(update=False)
 
 '''
@@ -59,7 +92,11 @@ uuid_udf = udf(generate_uuid, StringType)
 resolve_location_udf = udf(resolve_location, StringType())
 '''
 
+=======
+geo_data = datamart_geo.GeoData.download(update=False,destination='hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu')
+>>>>>>> gl1589-branch
 
+setup_environment()
 class ProcessData:
     def __init__(self, bloom_filter, minio_client, bucket, task, column, model):
         '''
@@ -72,6 +109,11 @@ class ProcessData:
         '''
         self.spark = SparkSession.builder.getOrCreate() # Default settings
         ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
+<<<<<<< HEAD
+=======
+        ks.set_option('compute.ops_on_diff_frames', True)
+
+>>>>>>> gl1589-branch
         # ppd.enable_pandas_on_spark_session(self.spark) # Enable pyspark.pandas support
         # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
         self.minio_client = minio_client
@@ -81,7 +123,7 @@ class ProcessData:
         self.task = task
         self.column = column
         self.model = model
-
+        
     def open_scrap(self, minio_client: Any, domain: str):
         if domain not in self.domains.keys():
             if self.minio_client:
@@ -89,10 +131,19 @@ class ProcessData:
                 scraper = pickle.load(obj)
                 self.domains[domain] = scraper
                 logging.info(f"{domain} MLscraper loaded")
-            elif os.path.exists("scrapers/"):
-                scraper = pickle.load("scrapers/scraper_" + domain)
-                self.domains[domain] = scraper
-                logging.info(f"{domain} MLscraper loaded")
+            elif os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                    if 'scrapers/' in zip_ref.namelist():
+                        with zip_ref.open('scrapers/scraper_' + domain, 'r') as pickle_file:
+                            pickle_content = pickle_file.read()
+                            scraper = pickle.loads(pickle_content)
+                            self.domains[domain] = scraper
+                            logging.info(f"{domain} MLscraper loaded")
+            else: # os.environ["READ_FROM_ZIP"] == "False"
+                if os.path.exists("scrapers/"):
+                    scraper = pickle.load("scrapers/scraper_" + domain)
+                    self.domains[domain] = scraper
+                    logging.info(f"{domain} MLscraper loaded")
         return self.domains[domain]
 
     @staticmethod
@@ -114,7 +165,7 @@ class ProcessData:
         hits = len(result)
         # print(hits)
         for val in result:
-            # print(val)
+            #print(val)
             processed = val.get("_source")
             if processed:
                 if not ProcessData.remove_text(processed["text"]) and not self.bloom_filter.check_bloom_filter(
@@ -136,12 +187,19 @@ class ProcessData:
                 df = df.withColumn("id", uuid_udf())
                 df = self.get_location_info(df)
             """
+<<<<<<< HEAD
             df = ks.create_df(cache)
+=======
+            df = self.create_df(cache)
+>>>>>>> gl1589-branch
             if not df.empty:
                 df["id"] = df.apply(lambda _: str(uuid.uuid4()))
                 df = self.get_location_info(df)
         return df
+<<<<<<< HEAD
 
+=======
+>>>>>>> gl1589-branch
     def create_df(self, ads):
         final_dict = []
         for ad in ads:
@@ -348,6 +406,7 @@ class ProcessData:
                     result = geo_data.resolve_name(part.strip())  # Attempt to resolve each part
                     if result:
                         return result
+<<<<<<< HEAD
             return None
 
         # Koalas does not support `when` directly, so use `apply` for conditional changes
@@ -363,30 +422,33 @@ class ProcessData:
         df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
         df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
         df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
+=======
+            return np.nan
+
+        # Koalas does not support `when` directly, so use `apply` for conditional changes
+        df["location"] = df["location"].replace("None", "")
+        
+        # Map "US" to "USA" and "GB" to "Great Britain"
+        df["location"] = df["location"].map(lambda x: "USA" if x == "US" else x)
+        df["location"] = df["location"].map(lambda x: "Great Britain" if x == "GB" else x)
+        
+        # Resolve locations
+        pandas_df = df.to_pandas()
+
+        # Apply resolve_location function to the 'location' column
+        pandas_df['loc'] = pandas_df['location'].apply(lambda x: resolve_location(x) if x else "")
+        df = ks.DataFrame(pandas_df)
+        # Extract information from resolved locations
+        df['loc_name'] = df['loc'].apply(lambda loc: loc.name if loc else "")
+        df['lat'] = df['loc'].apply(lambda loc: loc.latitude if loc else "")
+        df['lon'] = df['loc'].apply(lambda loc: loc.longitude if loc else "")
+        df['country'] = df['loc'].apply(lambda loc: loc.get_parent_area(level=0).name if loc else "")
+>>>>>>> gl1589-branch
         
         # Drop the temporary 'loc' column
         df = df.drop(columns=["loc"])
 
         return df
-    
-        """
-        With pyspark.sql
-        df = df.withColumn("location",  when(col("location") == "None", None)
-                                        .when(col("location") == "US", "USA")
-                                        .when(col("location") == "GB", "Great Britain")
-                                        .otherwise(col("location")))
-        df = df.withColumn("loc",   when(col("location").isNull(), None)
-                                    .otherwise(resolve_location_udf(col("location"))))
-        df = df.withColumn("loc_name",  when(col("loc").isNull(), None)
-                                        .otherwise(col("loc").getField("name")))
-        df = df.withColumn("lat",   when(col("loc").isNull(), None)
-                                    .otherwise(col("loc").getField("latitude")))
-        df = df.withColumn("lon",   when(col("loc").isNull(), None)
-                                    .otherwise(col("loc").getField("longitude")))
-        df = df.withColumn("country", when(col("loc").isNull(), None).otherwise(col("loc").getField("get_parent_area").getItem(0).getField("name")))
-        df = df.drop("loc")
-        return df
-        """
         
     @staticmethod
     def assert_types(df):
@@ -489,7 +551,12 @@ class ProcessData:
             
             # In Koalas, use the `assign` method to add new columns or modify existing ones
             # This method is akin to the pandas' way and is generally used for Koalas DataFrames
+<<<<<<< HEAD
             metadata = metadata.assign(seller=seller_username, location=location)
+=======
+            metadata['seller'] = seller_username
+            metadata['location'] = location
+>>>>>>> gl1589-branch
 
         return metadata
 
@@ -533,6 +600,7 @@ class ProcessData:
         elif 'text/plain' in content_type:
             parser = 'plain'
         else:
+<<<<<<< HEAD
             return None
 
     """
@@ -559,3 +627,6 @@ class ProcessData:
         return schema
     """    
     
+=======
+            return None
+>>>>>>> gl1589-branch

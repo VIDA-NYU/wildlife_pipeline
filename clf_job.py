@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 from typing import Any, Optional
 import pandas as pd
 import torch
@@ -6,13 +9,50 @@ import os
 from transformers import pipeline, DistilBertTokenizer
 import logging
 import constants
+
+from pyspark.sql import SparkSession
+from pyspark import SparkFiles
+#if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    #spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    #spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+    #spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+
+#os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+#os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data/"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        read_from_zip = False
+    else:
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
+
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+        read_from_zip = True
+        
+        #os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+        #os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
 from multi_model_inference import MultiModalModel, get_inference_data, run_inference
+import zipfile
+import io
 
 # Spark-related import statements:
 from pyspark.sql import SparkSession
 import databricks.koalas as ks
 
-
+setup_environment()
 class CLFJob:
     def __init__(
             self,
@@ -35,7 +75,6 @@ class CLFJob:
         self.model = model
         self.spark = SparkSession.builder.getOrCreate() # Default settings
         ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
-
 
     def perform_clf(self):
         files = self.minio_client.list_objects_names(self.bucket, self.date)
@@ -170,17 +209,31 @@ class CLFJob:
             if self.minio_client:
                 model_load_path = './model.pth'
                 self.minio_client.get_model("multimodal", "model.pth", model_load_path)
-            else:
-                model_load_path = './model/model.pth'
 
             # Check device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+            
             # Load the model weights
             if device == torch.device('cpu'):
-                loaded_model.load_state_dict(torch.load(model_load_path, map_location=device), strict=False)
+                if os.environ["READ_FROM_ZIP"] == "True":
+                    with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                        if 'model/' in zip_ref.namelist():
+                            with zip_ref.open('model/model.pth', 'r') as model_file:
+                                model_content = model_file.read()
+                                loaded_model.load_state_dict(torch.load(io.BytesIO(model_content), map_location=device), strict=False)
+                                print("Model state dictionary loaded successfully.")
+                else:
+                    loaded_model.load_state_dict(torch.load(model_load_path, map_location=device), strict=False)
             else:
-                loaded_model.load_state_dict(torch.load(model_load_path), strict=False)
+                if os.environ["READ_FROM_ZIP"] == "True":
+                    with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                        if 'model/' in zip_ref.namelist():
+                            with zip_ref.open('model/model.pth', 'r') as model_file:
+                                model_content = model_file.read()
+                                loaded_model.load_state_dict(torch.load(io.BytesIO(model_content)), strict=False)
+                                print("Model state dictionary loaded successfully.")
+                else:
+                    loaded_model.load_state_dict(torch.load(model_load_path), strict=False)
 
             # Move model to evaluation mode and to the device
             loaded_model.eval()
