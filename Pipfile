@@ -1,0 +1,41 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pandas = "*"
+elasticsearch = "*"
+pybloom = {git = "git+https://github.com/jaybaird/python-bloomfilter.git#egg=pybloom"}
+extruct = "==0.14.0"
+minio = "==7.1.14"
+pyarrow = "*"
+fastparquet = "*"
+s3fs = "*"
+datamart-geo = "*"
+pillow = "==9.5.0"
+transformers = "*"
+beautifulsoup4 = "*"
+arrow = "*"
+psutil = "*"
+sentencepiece = "*"
+protobuf = "==3.20.1"
+chardet = "*"
+ftfy = "*"
+pybase64 = "*"
+torchvision = "*"
+lxml = "<5.1.1"
+virtualenv = "*"
+venv-pack = "*"
+koalas = "*"
+torch = "*"
+torchaudio = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.8"
+<<<<<<< HEAD
+torch = ">=2.0.0, !=2.0.1, !=2.1.0"
+=======
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d

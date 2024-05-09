@@ -1,11 +1,30 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 import logging
 from typing import Dict, List, Optional
+<<<<<<< HEAD
+import os
+=======
 
+import os
+from pyspark.sql import SparkSession
+
+if os.environ["READ_FROM_ZIP"] == "True":
+    # Initialize SparkSession (or SparkContext)
+    spark = SparkSession.builder.getOrCreate()
+    # Add a file to distribute to worker nodes
+    spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+    spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+    
+os.environ["DATA_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip" if  os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+os.environ["PYTHON_FILES_ZIP_PATH"] = "hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip" if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d
 import datamart_geo
 from io import BytesIO
-
 from bs4 import BeautifulSoup
-from mlscraper.html import Page
+from mlscraper import Page
 import numpy as np
 from numpy import asarray
 import pandas as pd
@@ -15,11 +34,50 @@ from typing import Any
 import re
 import pickle
 import uuid
-import os
 import shutil
 import tempfile
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+import zipfile
+>>>>>>> f50299e9ff93e6535a18e9241d942ab9d7257d8d
 
+# Spark-related import statements:
+from pyspark.sql import SparkSession
+# from pyspark.sql.types import StructType, StringType, FloatType, StructField
+# from pyspark.sql.functions import udf, when, col
+# import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
+import databricks.koalas as ks
+=======
+import zipfile
 
+# Spark-related import statements:
+from pyspark.sql import SparkSession
+from pyspark import SparkFiles
+# import pyspark.pandas as ppd # Only supported in Spark v3.2 and above
+import databricks.koalas as ks
+
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data/"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        read_from_zip = False
+    else:
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
+
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+        read_from_zip = True
+
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+>>>>>>> gl1589-branch
 
 from create_metadata import (
     open_scrap,
@@ -33,11 +91,52 @@ import extruct
 import constants
 import ftfy
 
+<<<<<<< HEAD
 geo_data = datamart_geo.GeoData.download(update=False)
 
+'''
+# UDF Helper Functions:
+def generate_uuid():
+    return str(uuid.uuid4())
 
+def resolve_location(name):
+    if name:
+        parts = name.split(", ")  # Split the location string by comma
+        for part in parts:
+            result = geo_data.resolve_name(part)  # Remove leading/trailing spaces and resolve each part
+            if result:
+                return result
+    return None
+
+# UDF register statements:
+uuid_udf = udf(generate_uuid, StringType)
+resolve_location_udf = udf(resolve_location, StringType())
+'''
+
+=======
+geo_data = datamart_geo.GeoData.download(update=False,destination='hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu')
+>>>>>>> gl1589-branch
+
+setup_environment()
 class ProcessData:
     def __init__(self, bloom_filter, minio_client, bucket, task, column, model):
+        '''
+        self.spark = SparkSession.builder\
+            .config("spark.executor.instances", "10") \
+            .config("spark.executor.cores", "4") \
+            .config("spark.executor.memory", "4g") \
+            .config("spark.dynamicAllocation.enabled", "true") \
+            .config("spark.shuffle.service.enabled", "true").getOrCreate()
+        '''
+        self.spark = SparkSession.builder.getOrCreate() # Default settings
+        ks.set_option('compute.default_index_type', 'distributed')  # Set index type to distributed for large datasets
+<<<<<<< HEAD
+=======
+        ks.set_option('compute.ops_on_diff_frames', True)
+
+>>>>>>> gl1589-branch
+        # ppd.enable_pandas_on_spark_session(self.spark) # Enable pyspark.pandas support
+        # ppd.set_option("compute.default_index_type", "distributed")  # Using a distributed index for scalability
         self.minio_client = minio_client
         self.bloom_filter = bloom_filter
         self.domains = {}
@@ -45,7 +144,7 @@ class ProcessData:
         self.task = task
         self.column = column
         self.model = model
-
+        
     def open_scrap(self, minio_client: Any, domain: str):
         if domain not in self.domains.keys():
             if self.minio_client:
@@ -53,10 +152,19 @@ class ProcessData:
                 scraper = pickle.load(obj)
                 self.domains[domain] = scraper
                 logging.info(f"{domain} MLscraper loaded")
-            elif os.path.exists("scrapers/"):
-                scraper = pickle.load("scrapers/scraper_" + domain)
-                self.domains[domain] = scraper
-                logging.info(f"{domain} MLscraper loaded")
+            elif os.environ["READ_FROM_ZIP"] == "True":
+                with zipfile.ZipFile(os.environ["DATA_FILES_ZIP_PATH"], 'r') as zip_ref:
+                    if 'scrapers/' in zip_ref.namelist():
+                        with zip_ref.open('scrapers/scraper_' + domain, 'r') as pickle_file:
+                            pickle_content = pickle_file.read()
+                            scraper = pickle.loads(pickle_content)
+                            self.domains[domain] = scraper
+                            logging.info(f"{domain} MLscraper loaded")
+            else: # os.environ["READ_FROM_ZIP"] == "False"
+                if os.path.exists("scrapers/"):
+                    scraper = pickle.load("scrapers/scraper_" + domain)
+                    self.domains[domain] = scraper
+                    logging.info(f"{domain} MLscraper loaded")
         return self.domains[domain]
 
     @staticmethod
@@ -65,7 +173,7 @@ class ProcessData:
             return any(phrase in text for phrase in constants.phrases_to_filter)
         return True
 
-    def extract_information_from_docs(self, result: List[Dict]) -> pd.DataFrame:
+    def extract_information_from_docs(self, result: List[Dict]) -> ks.DataFrame:
 
         def log_processed(
                 raw_count: int,
@@ -78,7 +186,7 @@ class ProcessData:
         hits = len(result)
         # print(hits)
         for val in result:
-            # print(val)
+            #print(val)
             processed = val.get("_source")
             if processed:
                 if not ProcessData.remove_text(processed["text"]) and not self.bloom_filter.check_bloom_filter(
@@ -89,15 +197,31 @@ class ProcessData:
                 count += 1
                 cache.append(val)
         log_processed(hits, count)
-        df = pd.DataFrame()
+        df = ks.DataFrame()
         if count > 0:
+            """ 
+            Using rdds:
+            sc = self.spark.sparkContext
+            rdd = sc.parallelize(cache)
+            df = self.create_df(rdd)
+            if not df.rdd.isEmpty():
+                df = df.withColumn("id", uuid_udf())
+                df = self.get_location_info(df)
+            """
+<<<<<<< HEAD
+            df = ks.create_df(cache)
+=======
             df = self.create_df(cache)
+>>>>>>> gl1589-branch
             if not df.empty:
-                df["id"] = df.apply(lambda _: str(uuid.uuid4()), axis=1)
+                df["id"] = df.apply(lambda _: str(uuid.uuid4()))
                 df = self.get_location_info(df)
         return df
+<<<<<<< HEAD
 
-    def create_df(self, ads: list) -> pd.DataFrame:
+=======
+>>>>>>> gl1589-branch
+    def create_df(self, ads):
         final_dict = []
         for ad in ads:
             dict_df = self.create_dictionary_for_dataframe_extraction(ad)
@@ -117,51 +241,27 @@ class ProcessData:
                     final_dict.append(extract_dict)
                 except Exception as e:
                     logging.error(f"MLscraper error: {e}")
+            
+            # Handling metadata extraction and processing
             try:
-                metadata = None
                 metadata = extruct.extract(ad["html"],
-                                        base_url=ad["url"],
-                                        uniform=True,
-                                        syntaxes=['json-ld',
-                                                    'microdata',
-                                                    'opengraph',
-                                                    'dublincore'])
+                                           base_url=ad["url"],
+                                           uniform=True,
+                                           syntaxes=['json-ld', 'microdata', 'opengraph', 'dublincore'])
+                if metadata:
+                    self.process_metadata(metadata, dict_df, final_dict)
             except Exception as e:
                 logging.error(f"Exception on extruct: {e}")
 
-            if metadata:
-                if metadata.get("microdata"):
-                    for product in metadata.get("microdata"):
-                        micro = get_dict_microdata(product)
-                        if micro:
-                            extract_dict = dict_df.copy()
-                            extract_dict.update(micro)
-                            final_dict.append(extract_dict)
-                if metadata.get("opengraph"):
-                    open_ = get_sintax_opengraph(metadata.get("opengraph")[0])
-                    if open_:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(open_)
-                        final_dict.append(extract_dict)
-                if metadata.get("dublincore"):
-                    dublin = get_sintax_dublincore(metadata.get("dublincore")[0])
-                    if dublin:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(dublin)
-                        final_dict.append(extract_dict)
-                if metadata.get("json-ld"):
-                    for meta in metadata.get("json-ld"):
-                        if meta.get("@type") == 'Product':
-                            json_ld = get_dict_json_ld(meta)
-                            if json_ld:
-                                extract_dict = dict_df.copy()
-                                extract_dict.update(json_ld)
-                                final_dict.append(extract_dict)
-            logging.info("extracted metadata from ad")
-        df_metas = pd.DataFrame(final_dict)
-        df_metas["price"] = df_metas["price"].apply(lambda x: ProcessData.fix_price_str(x))
-        df_metas["currency"] = df_metas["currency"].apply(lambda x: ProcessData.fix_currency(x))
-        df_metas = df_metas.groupby('url').agg({
+        # Convert final_dict to a Koalas DataFrame
+        kdf_metas = ks.DataFrame(final_dict)
+        
+        # Applying transformations using Koalas operations
+        kdf_metas["price"] = kdf_metas["price"].apply(lambda x: self.fix_price_str(x), dtype='float')
+        kdf_metas["currency"] = kdf_metas["currency"].apply(lambda x: self.fix_currency(x))
+
+        # Grouping and aggregation in Koalas
+        kdf_metas = kdf_metas.groupby('url').agg({
             "title": 'first',
             "text": 'first',
             "domain": 'first',
@@ -177,12 +277,16 @@ class ProcessData:
             "seller_type": 'first',
             "seller_url": 'first',
             "location": 'first',
-            "ships to": 'first'}).reset_index()
-        df_metas = ProcessData.assert_types(df_metas)
+            "ships_to": 'first'
+        }).reset_index()
+
+        # Perform any necessary data type conversions or text fixing
+        kdf_metas = self.assert_types(kdf_metas)
         columns_to_fix = ["title", "text", "name", "description"]
-        df_metas[columns_to_fix] = df_metas[columns_to_fix].applymap(ProcessData.maybe_fix_text)
-        print("df_metas created")
-        return df_metas
+        kdf_metas[columns_to_fix] = kdf_metas[columns_to_fix].apply(lambda x: self.maybe_fix_text(x), dtype='str')
+
+        print("kdf_metas created")
+        return kdf_metas
 
     @staticmethod
     def fix_price_str(price):
@@ -230,70 +334,71 @@ class ProcessData:
             x = ", ".join(x)
         return x
 
-    def send_image(self, df: pd.DataFrame, image_folder: Optional[str], bucket_name: str, task: Optional[str],
+    def send_image(self, df: ks.DataFrame, image_folder: Optional[str], bucket_name: str, task: Optional[str],
                    timeout_sec: Optional[int] = 30):
-        def send_image_to_minio(row):
+        def send_image_to_minio(image_url, img_id):
             try:
-                response = requests.get(row["image"], timeout=timeout_sec)
+                response = requests.get(image_url, timeout=timeout_sec)
                 img = Image.open(BytesIO(response.content))
-                image_array = asarray(img)
-                image_path = send(image_array, row["id"])
-                image_path = bucket_name + "/" + image_path
-                return image_path
+                image_array = np.asarray(img)
+                return save_image_to_minio(image_array, img_id)
             except Exception as e:
                 print(f"image error: {e}")
                 return None
-        def send(image_array, img_id):
+
+        def save_image_to_minio(image_array, img_id):
             pil_image = Image.fromarray(image_array)
-            # Save the image to an in-memory file
             in_mem_file = BytesIO()
             pil_image.save(in_mem_file, format='png')
             in_mem_file.seek(0)
             length = len(in_mem_file.read())
             in_mem_file.seek(0)
-
-            if image_folder:
-                file_name = f"{image_folder}/{img_id}.png"
-            else:
-                file_name = f"{img_id}.png"
-
+            file_name = f"{image_folder}/{img_id}.png" if image_folder else f"{img_id}.png"
             self.minio_client.store_image(image=in_mem_file, file_name=file_name, length=length, bucket_name=bucket_name)
-            return file_name
+            return bucket_name + "/" + file_name
 
-        # if task:
-        #     sample_indices_0 = df[df["pred"] == 0].sample(int(len(df[df["pred"] == 0]) * 0.2)).index
-        #     sample_indices_1 = df[df["pred"] == 1].index
-        #     df["sample_image"] = False  # Initialize the column with "false"
-        #     df.loc[sample_indices_0, "sample_image"] = True  # Set "true" for sample indices
-        #     df.loc[sample_indices_1, "sample_image"] = True
-        # else:
-        # df["sample_image"] = True
+        # Pandas UDFs require conversion back to Koalas, so handle this carefully:
+        if isinstance(df, ks.DataFrame):
+            # Converting to pandas for the image processing part since it involves I/O operations
+            pdf = df.to_pandas()
+            pdf['image_path'] = [send_image_to_minio(row['image'], row['id']) for index, row in pdf.iterrows()]
+            result_df = ks.from_pandas(pdf)
+        else:
+            # This block is for safety, in case df is already a pandas DataFrame
+            df['image_path'] = [send_image_to_minio(row['image'], row['id']) for index, row in df.iterrows()]
+            result_df = df
 
-        df["image_path"] = df.apply(lambda x: send_image_to_minio(x), axis=1)
-
-        # df = df.drop(columns=["sample_image"])
-
-        return df
+        return result_df
 
     @staticmethod
     def save_image_local(df, image_folder):
-        def save_image(row):
+        def save_image(image_url, img_id):
             try:
-                response = requests.get(row["image"], timeout=30)
+                response = requests.get(image_url, timeout=30)
                 img = Image.open(BytesIO(response.content))
-                image_path = os.path.join(image_folder, f"{row['id']}.png")
-                img.save(image_path)  # Save the image locally
+                image_path = os.path.join(image_folder, f"{img_id}.png")
+                img.save(image_path)
                 return image_path
             except Exception as e:
                 print(f"image error: {e}")
                 return None
-        df["image_path"] = df.apply(lambda x: save_image(x), axis=1)
 
-        return df
+        # Similar approach as send_image, handle df conversion if necessary
+        if isinstance(df, ks.DataFrame):
+            pdf = df.to_pandas()
+            pdf['image_path'] = [save_image(row['image'], row['id']) for index, row in pdf.iterrows()]
+            result_df = ks.from_pandas(pdf)
+        else:
+            df['image_path'] = [save_image(row['image'], row['id']) for index, row in df.iterrows()]
+            result_df = df
+
+        return result_df
 
 
     @staticmethod
     def get_location_info(df):
+        """
+        Using pyspark.pandas:
         def resolve_location(name):
             if name:
                 parts = name.split(", ")  # Split the location string by comma
@@ -302,9 +407,10 @@ class ProcessData:
                     if result:
                         return result
             return None
-        df["location"] = np.where(df["location"] == "None", None, df["location"])
-        df["location"] = np.where(df["location"] == "US", "USA", df["location"])
-        df["location"] = np.where(df["location"] == "GB", "Great Britain", df["location"])
+        # With pyspark.pandas
+        df["location"] = ppd.when(df["location"] == "None", None).otherwise(df["location"])
+        df["location"] = ppd.when(df["location"] == "US", "USA").otherwise(df["location"])
+        df["location"] = ppd.when(df["location"] == "GB", "Great Britain").otherwise(df["location"])
         df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
         df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
         df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
@@ -312,7 +418,59 @@ class ProcessData:
         df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
         df = df.drop(columns=["loc"])
         return df
+        """
+        
+        def resolve_location(name):
+            if name:
+                parts = name.split(", ")  # Split the location string by comma
+                for part in parts:
+                    result = geo_data.resolve_name(part.strip())  # Attempt to resolve each part
+                    if result:
+                        return result
+<<<<<<< HEAD
+            return None
 
+        # Koalas does not support `when` directly, so use `apply` for conditional changes
+        df["location"] = df["location"].apply(lambda x: None if x == "None" else x)
+        df["location"] = df["location"].apply(lambda x: "USA" if x == "US" else x)
+        df["location"] = df["location"].apply(lambda x: "Great Britain" if x == "GB" else x)
+
+        # Resolve locations
+        df["loc"] = df["location"].apply(lambda x: resolve_location(x) if x else None)
+        
+        # Extract information from resolved locations
+        df['loc_name'] = df["loc"].apply(lambda loc: loc.name if loc else None)
+        df['lat'] = df["loc"].apply(lambda loc: loc.latitude if loc else None)
+        df['lon'] = df["loc"].apply(lambda loc: loc.longitude if loc else None)
+        df['country'] = df["loc"].apply(lambda loc: loc.get_parent_area(level=0).name if loc else None)
+=======
+            return np.nan
+
+        # Koalas does not support `when` directly, so use `apply` for conditional changes
+        df["location"] = df["location"].replace("None", "")
+        
+        # Map "US" to "USA" and "GB" to "Great Britain"
+        df["location"] = df["location"].map(lambda x: "USA" if x == "US" else x)
+        df["location"] = df["location"].map(lambda x: "Great Britain" if x == "GB" else x)
+        
+        # Resolve locations
+        pandas_df = df.to_pandas()
+
+        # Apply resolve_location function to the 'location' column
+        pandas_df['loc'] = pandas_df['location'].apply(lambda x: resolve_location(x) if x else "")
+        df = ks.DataFrame(pandas_df)
+        # Extract information from resolved locations
+        df['loc_name'] = df['loc'].apply(lambda loc: loc.name if loc else "")
+        df['lat'] = df['loc'].apply(lambda loc: loc.latitude if loc else "")
+        df['lon'] = df['loc'].apply(lambda loc: loc.longitude if loc else "")
+        df['country'] = df['loc'].apply(lambda loc: loc.get_parent_area(level=0).name if loc else "")
+>>>>>>> gl1589-branch
+        
+        # Drop the temporary 'loc' column
+        df = df.drop(columns=["loc"])
+
+        return df
+        
     @staticmethod
     def assert_types(df):
         expected_dtypes = {
@@ -350,7 +508,7 @@ class ProcessData:
                 df[column] = df[column].astype(expected_dtype)
         return df
 
-    def run_classification(self, df: pd.DataFrame, bucket_name: Optional[str]) -> pd.DataFrame:
+    def run_classification(self, df: ks.DataFrame, bucket_name: Optional[str]) -> ks.DataFrame:
         logging.info(self.task)
         classifier_job = CLFJob(bucket=self.bucket, final_bucket=self.bucket, minio_client=self.minio_client,
                                 date_folder=None, task=self.task, model=self.model, column=self.column)
@@ -363,7 +521,10 @@ class ProcessData:
                 folder_path= "./image_data"
                 os.makedirs(folder_path, exist_ok=True)
                 temp_dir = tempfile.mkdtemp(dir=folder_path)
-                df = ProcessData.save_image_local(df, temp_dir)
+                # Assuming save_image_local converts Koalas DF to pandas DF for image processing
+                pdf = df.to_pandas()  # Converting to pandas DF for image processing
+                pdf = ProcessData.save_image_local(pdf, temp_dir)
+                df = ks.from_pandas(pdf)  # Convert back to Koalas DF
                 df = classifier_job.get_inference_for_mmm(df, bucket_name)
                 shutil.rmtree(temp_dir)
             else:
@@ -372,11 +533,11 @@ class ProcessData:
             df = classifier_job.get_inference(df)
             df = classifier_job.get_inference_for_column(df)
         else:
-            raise ValueError("Task is either text-classification or zero-shot-classification")
+            raise ValueError("Task is either text-classification, zero-shot-classification, multi-model, or both")
         return df
 
     @staticmethod
-    def create_dictionary_for_dataframe_extraction(ad):
+    def create_dictionary_for_dataframe_extraction(self, ad):
         dict_df = {
             "url": ad["url"],
             "title": ad["title"],
@@ -396,18 +557,29 @@ class ProcessData:
             "location": None,
             "ships to": None,
         }
-        return dict_df
+        sdf = ks.DataFrame(dict_df)
+        return sdf
 
     @staticmethod
     def maybe_fix_text(x):
         # fixes Unicode that’s broken in various ways
         return ftfy.fix_text(x) if isinstance(x, str) else x
 
-    def add_seller_information_to_metadata(self, domain: str, metadata: dict, soup):
+    #self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])    
+    def add_seller_information_to_metadata(self, domain, metadata, soup):
         if 'ebay' in domain:
             seller_username, location = self.extract_seller_info_for_ebay(soup)
-            metadata["seller"] = seller_username
-            metadata["location"] = location
+            
+            # In Koalas, use the `assign` method to add new columns or modify existing ones
+            # This method is akin to the pandas' way and is generally used for Koalas DataFrames
+<<<<<<< HEAD
+            metadata = metadata.assign(seller=seller_username, location=location)
+=======
+            metadata['seller'] = seller_username
+            metadata['location'] = location
+>>>>>>> gl1589-branch
+
+        return metadata
 
     @staticmethod
     def extract_seller_info_for_ebay(soup):
@@ -449,4 +621,33 @@ class ProcessData:
         elif 'text/plain' in content_type:
             parser = 'plain'
         else:
+<<<<<<< HEAD
             return None
+
+    """
+    def get_schema():
+        schema = StructType([
+            StructField("url", StringType()),
+            StructField("title", StringType()),
+            StructField("text", StringType()),
+            StructField("domain", StringType()),
+            StructField("retrieved", StringType()),
+            StructField("name", StringType()),
+            StructField("description", StringType()),
+            StructField("image", StringType()),
+            StructField("production_data", StringType()),
+            StructField("category", StringType()),
+            StructField("price", FloatType()),
+            StructField("currency", StringType()),
+            StructField("seller", StringType()),
+            StructField("seller_type", StringType()),
+            StructField("seller_url", StringType()),
+            StructField("location", StringType()),
+            StructField("ships_to", StringType())
+        ])
+        return schema
+    """    
+    
+=======
+            return None
+>>>>>>> gl1589-branch

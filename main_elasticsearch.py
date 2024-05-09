@@ -1,13 +1,42 @@
+#!/usr/bin/env python3
+# coding: utf-8
+
 import argparse
-import os
 from etl_job import ETLJob
 from clf_job import CLFJob
 from etl_disk_job import ETLDiskJob
 from minio_client import MinioClient
 from elastic_search import ElasticSearch
 from bloom_filter import BloomFilter
+import os
+
+from pyspark.sql import SparkSession
+from pyspark import SparkFiles
+
+def setup_environment():
+    read_from_zip = False
+    # Check if the local 'data/' directory exists
+    local_data_dir = "data/"
+    if os.path.exists(local_data_dir) and os.path.isdir(local_data_dir):
+        read_from_zip = False
+    else:
+        # Initialize SparkSession (or SparkContext)
+        spark = SparkSession.builder.getOrCreate()
+
+        # Add a file to distribute to worker nodes
+        spark.sparkContext.addFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/data_files.zip")
+        spark.sparkContext.addPyFile("hdfs://nyu-dataproc-m:8020/user/gl1589_nyu_edu/python_files.zip")
+    
+        read_from_zip = True
+
+    # Set environment variables:
+    os.environ["READ_FROM_ZIP"] = str(read_from_zip)
+
+    os.environ["PYTHON_FILES_ZIP_PATH"] = SparkFiles.get("python_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
+    os.environ["DATA_FILES_ZIP_PATH"] = SparkFiles.get("data_files.zip") if os.environ["READ_FROM_ZIP"] == "True" else "NOT FOUND"
 
 def main():
+    setup_environment()
     parser = argparse.ArgumentParser(prog="ETL - Elasticsearch", description='Clean data on ES index and send it to Minio')
 
     # Common arguments for all

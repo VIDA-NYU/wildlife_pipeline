@@ -5,9 +5,13 @@ __pycache__
 ../DS_Store
 *.yaml
 /deploy_prod
-/data
+*data*/
 get_helm.sh
 image_data/
 ./myenv
 myvenv/
-# model/
+model/
+*.csv
+*.tar.gz
+*.zip
+.DS_Store
