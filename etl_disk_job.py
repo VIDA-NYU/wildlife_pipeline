@@ -27,13 +27,14 @@ from create_metadata import (
 
 class ETLDiskJob(ProcessData):
     def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
-                 model: str, bloom_filter: Optional[BloomFilter]):
+                 model: str, bloom_filter: Optional[BloomFilter], folder_name: Optional[str]):
         super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, column=column,
                          model=model)
         self.bucket = bucket
         self.path = path
         self.save_image = save_image
         self.task = task
+        self.folder_name = folder_name
 
     def get_files(self):
         try:
@@ -45,10 +46,23 @@ class ETLDiskJob(ProcessData):
             return None
         return files
 
+    def check_files_disk(self, filename):
+        try:
+            files = os.listdir(self.folder_name)
+            print(files)
+            files= [file for file in files if file.endswith(".csv")]
+            if filename in files:
+                return True
+            else:
+                return False
+        except FileNotFoundError:
+            logging.warning(f"No files on {self.folder_name}")
+            return False
+
     def run(self, folder_name: str, date: Optional[str]) -> None:
         # Run ETL for all the files on the given path on disk
         files = self.get_files()
-
+        # print(files)
         if files:
             for file in files:
                 logging.info(f"Starting processing file {file}")
@@ -57,7 +71,8 @@ class ETLDiskJob(ProcessData):
                 if self.minio_client:
                     checked_obj = self.minio_client.check_obj_exists(self.bucket, final_filename + ".parquet")
                 else:
-                    checked_obj = False
+                    final_filename = final_filename+".csv"
+                    checked_obj = self.check_files_disk(final_filename)
                 if not checked_obj:
                     cached = []
                     processed = []
@@ -78,13 +93,14 @@ class ETLDiskJob(ProcessData):
                         processed_df = self.extract_information_from_docs(cached)
                         processed.append(processed_df)
                     if len(processed) > 0:
-                        processed_df = pd.concat(processed).reset_index(drop=True)
+                        processed_list = processed
+                        processed_df = pd.concat(processed_list).reset_index(drop=True)
                         processed_df = processed_df[processed_df["title"].notnull()]
                         if self.minio_client:
                             self.load_file_to_minio(final_filename, processed_df)
                         else:
-                            final_filename = final_filename+".csv"
-                            processed_df.to_csv(final_filename, index=False)
+                            # final_filename = final_filename+".csv"
+                            processed_df.to_csv(self.folder_name + "/" + final_filename, index=False)
                         if self.minio_client:
                             image_bucket = f"images-{date}"
                         else:
@@ -95,17 +111,18 @@ class ETLDiskJob(ProcessData):
                             if self.minio_client:
                                 self.load_file_to_minio(final_filename, processed_df)
                             else:
-                                processed_df.to_csv(final_filename, index=False)
+                                processed_df.to_csv(self.folder_name + "/" + final_filename, index=False)
                 else:
-                    df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
-                    if "image_path" not in df.columns:
-                        image_bucket = f"images-{date}"
-                        df_w_image_path = self.save_image_if_applicable(df, date)
-                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
-                        if not processed_df.empty:
-                            self.load_file_to_minio(final_filename, processed_df)
-                    else:
-                        logging.info(f"file {final_filename} already indexed")
+                    if self.minio_client:
+                        df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
+                        if "image_path" not in df.columns:
+                            image_bucket = f"images-{date}"
+                            df_w_image_path = self.save_image_if_applicable(df, date)
+                            processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                            if not processed_df.empty:
+                                self.load_file_to_minio(final_filename, processed_df)
+                        else:
+                            logging.info(f"file {final_filename} already indexed")
             logging.info("ETL Job run completed")
 
     # Run classification and load data to MinIO
