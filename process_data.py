@@ -4,8 +4,6 @@ from typing import Dict, List, Optional
 import datamart_geo
 from io import BytesIO
 
-from bs4 import BeautifulSoup
-from mlscraper.html import Page
 import numpy as np
 from numpy import asarray
 import pandas as pd
@@ -19,17 +17,6 @@ import os
 import shutil
 import tempfile
 
-
-
-from create_metadata import (
-    open_scrap,
-    get_sintax_opengraph,
-    get_sintax_dublincore,
-    get_dict_json_ld,
-    get_dict_microdata
-)
-from clf_job import CLFJob
-import extruct
 import constants
 import ftfy
 
@@ -96,93 +83,6 @@ class ProcessData:
                 df["id"] = df.apply(lambda _: str(uuid.uuid4()), axis=1)
                 df = self.get_location_info(df)
         return df
-
-    def create_df(self, ads: list) -> pd.DataFrame:
-        final_dict = []
-        for ad in ads:
-            dict_df = self.create_dictionary_for_dataframe_extraction(ad)
-            final_dict.append(dict_df)
-            domain = ad["domain"].split(".")[0]
-            if "ebay" in domain:
-                extract_dict = dict_df.copy()
-                self.add_seller_information_to_metadata(ad["html"], domain, extract_dict, ad["content_type"])
-                final_dict.append(extract_dict)
-            if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
-                try:
-                    extract_dict = dict_df.copy()
-                    scraper = open_scrap(self.minio_client, domain)
-                    extract_dict.update(scraper.get(Page(ad["html"])))
-                    if extract_dict.get("product"):
-                        extract_dict["name"] = extract_dict.pop("product")
-                    final_dict.append(extract_dict)
-                except Exception as e:
-                    logging.error(f"MLscraper error: {e}")
-            try:
-                metadata = None
-                metadata = extruct.extract(ad["html"],
-                                        base_url=ad["url"],
-                                        uniform=True,
-                                        syntaxes=['json-ld',
-                                                    'microdata',
-                                                    'opengraph',
-                                                    'dublincore'])
-            except Exception as e:
-                logging.error(f"Exception on extruct: {e}")
-
-            if metadata:
-                if metadata.get("microdata"):
-                    for product in metadata.get("microdata"):
-                        micro = get_dict_microdata(product)
-                        if micro:
-                            extract_dict = dict_df.copy()
-                            extract_dict.update(micro)
-                            final_dict.append(extract_dict)
-                if metadata.get("opengraph"):
-                    open_ = get_sintax_opengraph(metadata.get("opengraph")[0])
-                    if open_:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(open_)
-                        final_dict.append(extract_dict)
-                if metadata.get("dublincore"):
-                    dublin = get_sintax_dublincore(metadata.get("dublincore")[0])
-                    if dublin:
-                        extract_dict = dict_df.copy()
-                        extract_dict.update(dublin)
-                        final_dict.append(extract_dict)
-                if metadata.get("json-ld"):
-                    for meta in metadata.get("json-ld"):
-                        if meta.get("@type") == 'Product':
-                            json_ld = get_dict_json_ld(meta)
-                            if json_ld:
-                                extract_dict = dict_df.copy()
-                                extract_dict.update(json_ld)
-                                final_dict.append(extract_dict)
-            logging.info("extracted metadata from ad")
-        df_metas = pd.DataFrame(final_dict)
-        df_metas["price"] = df_metas["price"].apply(lambda x: ProcessData.fix_price_str(x))
-        df_metas["currency"] = df_metas["currency"].apply(lambda x: ProcessData.fix_currency(x))
-        df_metas = df_metas.groupby('url').agg({
-            "title": 'first',
-            "text": 'first',
-            "domain": 'first',
-            "name": 'first',
-            "description": 'first',
-            "image": 'first',
-            "retrieved": 'first',
-            "production_data": 'first',
-            "category": 'first',
-            "price": 'first',
-            "currency": 'first',
-            "seller": 'first',
-            "seller_type": 'first',
-            "seller_url": 'first',
-            "location": 'first',
-            "ships to": 'first'}).reset_index()
-        df_metas = ProcessData.assert_types(df_metas)
-        columns_to_fix = ["title", "text", "name", "description"]
-        df_metas[columns_to_fix] = df_metas[columns_to_fix].applymap(ProcessData.maybe_fix_text)
-        print("df_metas created")
-        return df_metas
 
     @staticmethod
     def fix_price_str(price):
@@ -260,18 +160,7 @@ class ProcessData:
             self.minio_client.store_image(image=in_mem_file, file_name=file_name, length=length, bucket_name=bucket_name)
             return file_name
 
-        # if task:
-        #     sample_indices_0 = df[df["pred"] == 0].sample(int(len(df[df["pred"] == 0]) * 0.2)).index
-        #     sample_indices_1 = df[df["pred"] == 1].index
-        #     df["sample_image"] = False  # Initialize the column with "false"
-        #     df.loc[sample_indices_0, "sample_image"] = True  # Set "true" for sample indices
-        #     df.loc[sample_indices_1, "sample_image"] = True
-        # else:
-        # df["sample_image"] = True
-
         df["image_path"] = df.apply(lambda x: send_image_to_minio(x), axis=1)
-
-        # df = df.drop(columns=["sample_image"])
 
         return df
 
@@ -350,31 +239,6 @@ class ProcessData:
                 df[column] = df[column].astype(expected_dtype)
         return df
 
-    def run_classification(self, df: pd.DataFrame, bucket_name: Optional[str]) -> pd.DataFrame:
-        logging.info(self.task)
-        classifier_job = CLFJob(bucket=self.bucket, final_bucket=self.bucket, minio_client=self.minio_client,
-                                date_folder=None, task=self.task, model=self.model, column=self.column)
-        if self.task == "zero-shot-classification":
-            df = classifier_job.get_inference(df)
-        elif self.task == "text-classification":
-            df = classifier_job.get_inference_for_column(df)
-        elif self.task == "multi-model":
-            if "image_path" not in df.columns:
-                folder_path= "./image_data"
-                os.makedirs(folder_path, exist_ok=True)
-                temp_dir = tempfile.mkdtemp(dir=folder_path)
-                df = ProcessData.save_image_local(df, temp_dir)
-                df = classifier_job.get_inference_for_mmm(df, bucket_name)
-                shutil.rmtree(temp_dir)
-            else:
-                df = classifier_job.get_inference_for_mmm(df, bucket_name)
-        elif self.task == "both":
-            df = classifier_job.get_inference(df)
-            df = classifier_job.get_inference_for_column(df)
-        else:
-            raise ValueError("Task is either text-classification or zero-shot-classification")
-        return df
-
     @staticmethod
     def create_dictionary_for_dataframe_extraction(ad):
         dict_df = {
@@ -405,25 +269,35 @@ class ProcessData:
 
     def add_seller_information_to_metadata(self, domain: str, metadata: dict, soup):
         if 'ebay' in domain:
-            seller_username, location = self.extract_seller_info_for_ebay(soup)
+            seller_username, location,  info, url = self.extract_seller_info_for_ebay(soup)
             metadata["seller"] = seller_username
             metadata["location"] = location
+            metadata["seller_info"] = info
+            metadata["seller_url"] = url
 
     @staticmethod
     def extract_seller_info_for_ebay(soup):
 
-        # Parse the HTML content
-        # soup = BeautifulSoup(page_html, 'html.parser')
-        # Find the div element with the specified class
-        seller_info_div = soup.find('div', class_='ux-seller-section__item--seller')
+        seller_info_div = soup.find('div', class_="d-stores-info-categories__container__info__section")
 
         if seller_info_div:
             # Extract the seller's username
             seller_username = seller_info_div.a.span.get_text(strip=True)
-            # print(f"Seller Username: {seller_username}")
+            print(f"Seller Username: {seller_username}")
+            span_elements = seller_info_div.find_all('span', class_='ux-textspans ux-textspans--BOLD')
+
+            seller_info = []
+            for span in span_elements:
+                seller_info.append(span.text)
+
+            seller_url = re.search(r'(?<=href=")[^"]+', str(seller_info_div)).group()
+
+
         else:
             logging.error("Seller username not found.")
-            seller_username = ""
+            seller_username = None
+            seller_info = None
+            seller_url = None
 
         shipping_location_element = soup.find('div', {
             'class': 'ux-labels-values col-12 ux-labels-values--itemLocation'})
@@ -432,11 +306,11 @@ class ProcessData:
             # Extract the shipping location text
             shipping_location_text = shipping_location_element.get_text()
             shipping_location = shipping_location_text.split(':')[-1].strip()
-            return seller_username, shipping_location
         else:
-            logging.error("Shipping location not found.")
-            return seller_username, ""
+            shipping_location = None
 
+
+        return seller_username, shipping_location, seller_info, seller_url
 
     @staticmethod
     def get_parser(content_type):
