@@ -193,6 +193,7 @@ class ETLDiskJob(ProcessData):
                         if "ebay" in domain:
                             extract_dict = dict_df.copy()
                             self.add_seller_information_to_metadata(domain, extract_dict, soup)
+                            self.add_description_to_metadata(domain, extract_dict, soup)
                             final_dict.append(extract_dict)
                         try:
                             if self.minio_client and domain in constants.DOMAIN_SCRAPERS:

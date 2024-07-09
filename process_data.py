@@ -14,8 +14,8 @@ import re
 import pickle
 import uuid
 import os
-import shutil
-import tempfile
+from bs4 import BeautifulSoup
+
 
 import constants
 import ftfy
@@ -267,13 +267,24 @@ class ProcessData:
         # fixes Unicode that’s broken in various ways
         return ftfy.fix_text(x) if isinstance(x, str) else x
 
-    def add_seller_information_to_metadata(self, domain: str, metadata: dict, soup):
+    def add_information_to_metadata(self, domain: str, metadata: dict, soup):
         if 'ebay' in domain:
             seller_username, location,  info, url = self.extract_seller_info_for_ebay(soup)
+            item_description = self.extract_description_for_ebay(soup)
             metadata["seller"] = seller_username
             metadata["location"] = location
             metadata["seller_info"] = info
             metadata["seller_url"] = url
+            metadata["description"] = item_description
+
+    @staticmethod
+    def extract_description_for_ebay(soup):
+        item_description_url = soup.find(id="desc_ifr")["src"]
+        item_id = item_description_url[item_description_url.rindex('/')+1:]
+        soup2 = BeautifulSoup(requests.get(item_description_url.format(item_id=item_id)).content, 'html.parser')
+
+        item_description = soup2.get_text(strip=True, separator='\n')
+        return item_description
 
     @staticmethod
     def extract_seller_info_for_ebay(soup):
@@ -291,7 +302,6 @@ class ProcessData:
                 seller_info.append(span.text)
 
             seller_url = re.search(r'(?<=href=")[^"]+', str(seller_info_div)).group()
-
 
         else:
             logging.error("Seller username not found.")
