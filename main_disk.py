@@ -42,7 +42,7 @@ def main():
         path = f"/data/{filename}/data_pages/"
         folder_name = ""
         etl_job = ETLDiskJob(bucket=final_bucket, minio_client=minio_client, path=path, save_image=save_image,
-                             task=task, column=column, model=model, bloom_filter=bloom)
+                             task=task, column=column, model=model, bloom_filter=bloom, folder_name=folder_name)
         etl_job.run(folder_name=folder_name, date=date)
 
     print("Job Completed")

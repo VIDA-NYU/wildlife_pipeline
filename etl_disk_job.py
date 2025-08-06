@@ -81,37 +81,42 @@ class ETLDiskJob(ProcessData):
 
                     # Processing decompressed data in batch size of 5000 records
                     for line in decompressed_data.splitlines():
-                        json_doc = json.loads(line)
-                        cached.append(json_doc)
-                        count += 1
-                        if count % 5000 == 0:
-                            processed_df = self.extract_information_from_docs(cached)
-                            processed.append(processed_df)
-                            count = 0
-                            cached = []
+                        try:
+                            json_doc = json.loads(line)
+                            cached.append(json_doc)
+                            count += 1
+                            if count % 5000 == 0:
+                                processed_df = self.extract_information_from_docs(cached)
+                                processed.append(processed_df)
+                                count = 0
+                                cached = []
+                        except Exception:
+                            continue
                     if len(cached) > 0:
                         processed_df = self.extract_information_from_docs(cached)
                         processed.append(processed_df)
                     if len(processed) > 0:
-                        processed_list = processed
-                        processed_df = pd.concat(processed_list).reset_index(drop=True)
-                        processed_df = processed_df[processed_df["title"].notnull()]
-                        if self.minio_client:
-                            self.load_file_to_minio(final_filename, processed_df)
-                        else:
-                            # final_filename = final_filename+".csv"
-                            processed_df.to_csv(self.folder_name + "/" + final_filename, index=False)
-                        if self.minio_client:
-                            image_bucket = f"images-{date}"
-                        else:
-                            image_bucket = None
-                        df_w_image_path = self.save_image_if_applicable(processed_df, date)
-                        processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                        # processed_list = processed
+                        processed_df = pd.concat(processed).reset_index(drop=True)
+                        # print(processed_df)
                         if not processed_df.empty:
+                            processed_df = processed_df[processed_df["title"].notnull()]
                             if self.minio_client:
                                 self.load_file_to_minio(final_filename, processed_df)
                             else:
+                                # final_filename = final_filename+".csv"
                                 processed_df.to_csv(self.folder_name + "/" + final_filename, index=False)
+                            if self.minio_client:
+                                image_bucket = f"images-{date}"
+                            else:
+                                image_bucket = None
+                            df_w_image_path = self.save_image_if_applicable(processed_df, date)
+                            processed_df = self.perform_classification(df_w_image_path, image_bucket)
+                            if not processed_df.empty:
+                                if self.minio_client:
+                                    self.load_file_to_minio(final_filename, processed_df)
+                                else:
+                                    processed_df.to_csv(self.folder_name + "/" + final_filename, index=False)
                 else:
                     if self.minio_client:
                         df = self.minio_client.read_df_parquet(self.bucket, final_filename + ".parquet")
@@ -154,90 +159,93 @@ class ETLDiskJob(ProcessData):
     def create_df(self, ads: list) -> pd.DataFrame:
         final_dict = []
         for ad in ads:
-            html_content = ETLDiskJob.get_decoded_html_from_bytes(ad["content"])
-            if html_content:
-                content_type = ad["content_type"]
-                parser = ProcessData.get_parser(content_type)
-                soup = BeautifulSoup(html_content, parser)
-                text, title = ETLDiskJob.get_text_title(soup=soup)
-                if not ProcessData.remove_text(text) and not self.maybe_check_bloom(text):
-                    domain = ETLDiskJob.get_domain(ad["url"])
-                    dict_df = {
-                        "url": ad["url"],
-                        "title": title,
-                        "text": text,
-                        "domain": domain,
-                        "retrieved": ETLDiskJob.get_time(ad["fetch_time"]),
-                        "name": None,
-                        "description": None,
-                        "image": None,
-                        "production_data": None,
-                        "category": None,
-                        "price": None,
-                        "currency": None,
-                        "seller": None,
-                        "seller_type": None,
-                        "seller_url": None,
-                        "location": None,
-                        "ships to": None,
-                    }
-                    final_dict.append(dict_df)
-                    domain = domain.split(".")[0]
-                    if "ebay" in domain:
-                        extract_dict = dict_df.copy()
-                        self.add_seller_information_to_metadata(domain, extract_dict, soup)
-                        final_dict.append(extract_dict)
-                    try:
-                        if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
+            if "/itm/" in ad["url"]:
+                html_content = ETLDiskJob.get_decoded_html_from_bytes(ad["content"])
+                if html_content:
+                    content_type = ad["content_type"]
+                    parser = ProcessData.get_parser(content_type)
+                    soup = BeautifulSoup(html_content, parser)
+                    text, title = ETLDiskJob.get_text_title(soup=soup)
+                    if not ProcessData.remove_text(text) and not self.maybe_check_bloom(text):
+                        domain = ETLDiskJob.get_domain(ad["url"])
+                        dict_df = {
+                            "url": ad["url"],
+                            "title": title,
+                            "text": text,
+                            "domain": domain,
+                            "retrieved": ETLDiskJob.get_time(ad["fetch_time"]),
+                            "name": None,
+                            "description": None,
+                            "image": None,
+                            "production_data": None,
+                            "category": None,
+                            "price": None,
+                            "currency": None,
+                            "seller": None,
+                            "seller_type": None,
+                            "seller_url": None,
+                            "seller_info": None,
+                            "location": None,
+                            "ships to": None,
+                        }
+                        final_dict.append(dict_df)
+                        domain = domain.split(".")[0]
+                        if "ebay" in domain:
                             extract_dict = dict_df.copy()
-                            scraper = self.open_scrap(self.minio_client, domain)
-                            extract_dict.update(scraper.get(Page(html_content)))
-                            if extract_dict.get("product"):
-                                extract_dict["name"] = extract_dict.pop("product")
+                            self.add_seller_information_to_metadata(domain, extract_dict, soup)
+                            self.add_description_to_metadata(domain, extract_dict, soup)
                             final_dict.append(extract_dict)
-                    except Exception as e:
-                        logging.error(e)
-                    try:
-                        metadata = None
-                        metadata = extruct.extract(html_content,
-                                                   base_url=ad["url"],
-                                                   uniform=True,
-                                                   syntaxes=['json-ld',
-                                                             'microdata',
-                                                             'opengraph',
-                                                             'dublincore'])
-                    except Exception as e:
-                        logging.error(f"Exception on extruct: {e}")
-                    if metadata:
-                        if metadata.get("microdata"):
-                            for product in metadata.get("microdata"):
-                                micro = get_dict_microdata(product)
-                                if micro:
-                                    extract_dict = dict_df.copy()
-                                    extract_dict.update(micro)
-                                    final_dict.append(extract_dict)
-                        if metadata.get("opengraph"):
-                            open_ = get_sintax_opengraph(metadata.get("opengraph")[0])
-                            if open_:
+                        try:
+                            if self.minio_client and domain in constants.DOMAIN_SCRAPERS:
                                 extract_dict = dict_df.copy()
-                                extract_dict.update(open_)
+                                scraper = self.open_scrap(self.minio_client, domain)
+                                extract_dict.update(scraper.get(Page(html_content)))
+                                if extract_dict.get("product"):
+                                    extract_dict["name"] = extract_dict.pop("product")
                                 final_dict.append(extract_dict)
-                        if metadata.get("dublincore"):
-                            dublin = get_sintax_dublincore(metadata.get("dublincore")[0])
-                            if dublin:
-                                extract_dict = dict_df.copy()
-                                extract_dict.update(dublin)
-                                final_dict.append(extract_dict)
-                        if metadata.get("json-ld"):
-                            for meta in metadata.get("json-ld"):
-                                if meta.get("@type") == 'Product':
-                                    json_ld = get_dict_json_ld(meta)
-                                    if json_ld:
+                        except Exception as e:
+                            logging.error(e)
+                        try:
+                            metadata = None
+                            metadata = extruct.extract(html_content,
+                                                    base_url=ad["url"],
+                                                    uniform=True,
+                                                    syntaxes=['json-ld',
+                                                                'microdata',
+                                                                'opengraph',
+                                                                'dublincore'])
+                        except Exception as e:
+                            logging.error(f"Exception on extruct: {e}")
+                        if metadata:
+                            if metadata.get("microdata"):
+                                for product in metadata.get("microdata"):
+                                    micro = get_dict_microdata(product)
+                                    if micro:
                                         extract_dict = dict_df.copy()
-                                        extract_dict.update(json_ld)
+                                        extract_dict.update(micro)
                                         final_dict.append(extract_dict)
-                                        extract_dict = None
-                    metadata = None
+                            if metadata.get("opengraph"):
+                                open_ = get_sintax_opengraph(metadata.get("opengraph")[0])
+                                if open_:
+                                    extract_dict = dict_df.copy()
+                                    extract_dict.update(open_)
+                                    final_dict.append(extract_dict)
+                            if metadata.get("dublincore"):
+                                dublin = get_sintax_dublincore(metadata.get("dublincore")[0])
+                                if dublin:
+                                    extract_dict = dict_df.copy()
+                                    extract_dict.update(dublin)
+                                    final_dict.append(extract_dict)
+                            if metadata.get("json-ld"):
+                                for meta in metadata.get("json-ld"):
+                                    if meta.get("@type") == 'Product':
+                                        json_ld = get_dict_json_ld(meta)
+                                        if json_ld:
+                                            extract_dict = dict_df.copy()
+                                            extract_dict.update(json_ld)
+                                            final_dict.append(extract_dict)
+                                            extract_dict = None
+                        metadata = None
         df_metas = pd.DataFrame()
         if len(final_dict) > 0:
             df_metas = pd.DataFrame(final_dict)
@@ -258,6 +266,7 @@ class ETLDiskJob(ProcessData):
                 "seller": 'first',
                 "seller_type": 'first',
                 "seller_url": 'first',
+                "seller_info": 'first',
                 "location": 'first',
                 "ships to": 'first'}).reset_index()
             df_metas = ProcessData.assert_types(df_metas)
