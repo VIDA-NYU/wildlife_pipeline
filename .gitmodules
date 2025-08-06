@@ -1,0 +1,9 @@
+[submodule "hilts"]
+	path = hilts
+	url = git@github.com:VIDA-NYU/hilts.git
+[submodule "wildlife_pipeline"]
+	path = wildlife_pipeline
+	url = git@github.com:VIDA-NYU/wildlife_pipeline.git
+[submodule "LTS"]
+	path = LTS
+	url = git@github.com:VIDA-NYU/LTS.git
