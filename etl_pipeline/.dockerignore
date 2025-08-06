@@ -1,0 +1,17 @@
+__pycache__/
+.venv/
+.conda/
+.vscode/
+bloom/
+data/
+big-data/
+model/
+deploy_examples/
+etl_manifest.yaml
+etl_manifest2.yaml
+manifest.yaml
+README.md
+image_path/
+.ipynb_checkpoints/
+Untitled.ipynb
+README.md

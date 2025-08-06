@@ -1,0 +1,25 @@
+pandas
+elasticsearch
+pybloom @ git+https://github.com/jaybaird/python-bloomfilter.git#egg=pybloom
+extruct==0.14.0
+lxml==5.1.0
+minio==7.1.14
+pyarrow
+mlscraper==1.0.0rc3
+fastparquet
+s3fs
+datamart_geo
+Pillow==9.5.0
+# transformers==4.29.2
+# torch
+beautifulsoup4
+arrow
+psutil
+# xformers
+sentencepiece
+protobuf==3.20.1
+chardet
+ftfy
+pybase64
+pyyaml
+# torchvision

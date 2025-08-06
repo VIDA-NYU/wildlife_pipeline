@@ -1,0 +1,14 @@
+.vscode/
+bloom/
+myenv/
+__pycache__
+../DS_Store
+*.yaml
+/deploy_prod
+/data
+get_helm.sh
+image_data/
+./myenv
+myvenv/
+# model/
+processed_files
