@@ -26,10 +26,9 @@ from create_metadata import (
 )
 
 class ETLDiskJob(ProcessData):
-    def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str], column: str,
+    def __init__(self, bucket: str, minio_client: Any, path: str, save_image: Optional[bool], task: Optional[str],
                  model: str, bloom_filter: Optional[BloomFilter], folder_name: Optional[str]):
-        super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, column=column,
-                         model=model)
+        super().__init__(bloom_filter=bloom_filter, minio_client=minio_client, bucket=bucket, task=task, model=model)
         self.bucket = bucket
         self.path = path
         self.save_image = save_image

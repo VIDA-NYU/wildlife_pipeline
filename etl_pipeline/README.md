@@ -1,24 +1,115 @@
-## ACHE
+# Wildlife ETL Pipeline
+## Table of Contents
 
-The ACHE crawler was used to collect data from selected web page seeds as well as other customized paths found on the pages. To understand how ACHE works and the concept of link filters, please refer to the project's [documentation](http://ache.readthedocs.io/en/latest/).
+- [Overview](#wildlife-etl-pipeline)
+- [ACHE Crawler](#ache-crawler)
+- [Extract](#extract)
+- [Transform](#transform)
+- [Load](#load)
+- [Text Classification](#text-classification)
+- [How to Run the Pipeline](#how-to-run-the-pipeline)
+      - [1. Prepare Your Environment](#1-prepare-your-environment)
+      - [2. Set MinIO Credentials](#2-set-minio-credentials)
+      - [3. Run the Pipeline](#3-run-the-pipeline)
+      - [4. Output](#4-output)
+      - [5. Command-line Arguments](#5-command-line-arguments)
+      - [6. Example Usage](#6-example-usage)
 
-The output data is a .deflate file. The data format and more information can also be found [here](https://ache.readthedocs.io/en/latest/data-formats.html#dataformat-files).
+---
+
+## How to Run the Pipeline
+
+### 1. Prepare Your Environment
+
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Set MinIO Credentials
+
+Set your MinIO credentials as environment variables:
+```bash
+export MINIO_KEY=<your-minio-access-key>
+export MINIO_SECRET=<your-minio-secret-key>
+```
+
+### 3. Run the Pipeline
+
+Execute the pipeline:
+```bash
+python main_disk.py \
+      -finalbucket <minio-bucket-name> \
+      -filename <crawl-folder-name> \
+      -bloom <bloom-filter-file> \
+      -image <True/False> \
+      -date <date-string> \
+      -temporal <True/False>
+```
+- For temporal analysis, set `-temporal True` and provide the appropriate folder structure.
+
+### 4. Output
+
+- Processed CSV files and images are saved to your MinIO bucket or local disk, depending on configuration.
+- Logs indicate progress and errors.
+
+**Tip:**
+
+Customize the pipeline by editing arguments in `main_disk.py` or modifying the `ETLDiskJob` class for advanced workflows.
+
+### 5. Command-line Arguments
+
+| Argument         | Type    | Required | Description                                                                 |
+|------------------|---------|----------|-----------------------------------------------------------------------------|
+| `-finalbucket`   | str     | Yes      | MinIO bucket to store processed data (e.g., `clf`, `elt`)                   |
+| `-model`         | str     | No       | Model name on Hugging Face for classification tasks                         |
+| `-bloom`         | str     | No       | MinIO bloom filter file name for deduplication                              |
+| `-task`          | str     | No       | Task to perform: `text-classification`, `zero-shot-classification`, `both`, `multi-model` |
+| `-image`         | bool    | No       | Whether to download images (`True` or `False`)                              |
+| `-filename`      | str     | No       | Filename on disk. For temporal tasks, this is the crawler ID                |
+| `-date`          | str     | No       | Date string for the image bucket                                            |
+| `-temporal`      | bool    | No       | Run pipeline in temporal analysis mode (`True` or `False`)                  |
+
+### 6. Example Usage
+
+```bash
+python main_disk.py \
+      -finalbucket wildlife-data \
+      -filename crawl_data-1699796707793-0 \
+      -model xlm-roberta-large-xnli \
+      -task True \
+      -image True \
+      -date 2024-09-10 \
+      -bloom bloom_filter \
+      -temporal False
+```
+This repository provides a complete pipeline for collecting, extracting, transforming, classifying, and storing wildlife-related data from online sources. The pipeline is modular and supports scalable deployment using MinIO, Docker, and Kubernetes.
+
+---
+
+## ACHE Crawler
+
+We use the [ACHE crawler](http://ache.readthedocs.io/en/latest/) to collect data from selected web page seeds and customized paths. ACHE supports configurable link filters and outputs data in `.deflate` format.
+See [ACHE data format documentation](https://ache.readthedocs.io/en/latest/data-formats.html#dataformat-files) for details.
+
+---
 
 ## Extract
 
-This script is used to extract the data crawled by ACHE. The first step involves retrieving all the data stored on [Disk](https://github.com/VIDA-NYU/wildlife_pipeline/blob/main/main_disk.py) or [Elasticsearch](https://github.com/VIDA-NYU/wildlife_pipeline/blob/main/main_elasticsearch.py). The data coming from disk will be a .deflate file.
+Extraction scripts retrieve crawled data from disk (`.deflate` files) or Elasticsearch.
+- Disk data can be organized as a single folder or as temporal collections (multiple folders by date).
+- Data is deduplicated using a [Bloom Filter](https://github.com/VIDA-NYU/wildlife_pipeline/blob/main/bloom_filter.py) stored in MinIO.
 
+**MinIO Setup:**
+To start a local MinIO server for storage:
+```bash
+docker run -p 9000:9000 -p 39889:39889 -v /data_minio:/data \
+  -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=KMIkJhjA5yMeOPzD" \
+  minio/minio server /data --console-address :39889
+```
 
-
-The data stored on Disk can be: Regular data folder when there is only one data collection provided by one crawler and Temporal data - Where we have a collection of folders for different dates.
-
-To start the pipeline we need to have a S3-like storage to send the data - in your case we use a open source [Minio](https://hub.docker.com/r/minio/minio) storage.
-To start a Minio app on docker
-```docker run -p 9000:9000 -p 39889:39889 -v /data_minio:/data -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=KMIkJhjA5yMeOPzD" minio/minio server /data --console-address :39889 ```
-
-
- We exclude certain pages, such as those without any text or pages that have identical content but different URLs. All data is saved, and we check whether it has already been indexed using a [Bloom Filter](https://github.com/VIDA-NYU/wildlife_pipeline/blob/main/bloom_filter.py).
- Make sure to have a bucket for bloom filter at your Minio.
+We exclude certain pages, such as those without any text or pages that have identical content but different URLs. All data is saved, and we check whether it has already been indexed using a [Bloom Filter](https://github.com/VIDA-NYU/wildlife_pipeline/blob/main/bloom_filter.py).
+Make sure to have a bucket for bloom filter at your Minio.
 
 
 ## Transform
@@ -84,29 +175,87 @@ With the location column, we leverage [datamart_geo](https://gitlab.com/ViDA-NYU
 Finally, in the load step, we store the processed dataframe and images in a [MinIO](https://miniodisn.hsrn.nyu.edu/browser) bucket.
 
 
-## Classification
-
-### Zero-shot Classification
-A Zero-Shot model is a machine learning model that can perform a task without being explicitly trained on examples specific to that task. It relies on pretrained language models that have learned general language representations from large datasets. We use a fine-tuned model of XLM-RoBERTa. The model xlm-roberta-large-xnli is fine-tuned on a combination of data in 15 languages, but can also be effective in other languages since RoBERTa was trained in 100 different languages.
-We provide the model one hypothesis: `This product advertisement is about {}:`
-Then, as input for the inference, we can use any text column from the dataset.
-
-and the labels we try to predict is:
-
-```
-labels = ["a real animal",
-          "a toy",
-          "a print of an animal",
-          "an object",
-          "a faux animal",
-          "an animal body part",
-          "an faux animal body part"]
-```
-We select the final label from the maximum score between the labels.
-`label_product and score_product`.
-
 ### Text Classification
 The attritbutes `label and score` are releted to another model used to classify the ads in "animal product - 1" and "not an animal product - 0".
 The model is not yet available and its on development phase.
 
+## How to Run the Pipeline
+
+### 1. Prepare Your Environment
+
+- Install dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+export MINIO_KEY=<your-minio-access-key>
+export MINIO_SECRET=<your-minio-secret-key>
+### 2. Set MinIO Credentials
+
+Set your MinIO credentials as environment variables:
+```bash
+export MINIO_KEY=<your-minio-access-key>
+export MINIO_SECRET=<your-minio-secret-key>
+```
+
+### 3. Run the Pipeline
+
+Execute the pipeline using the following command:
+```bash
+python main_disk.py -finalbucket <minio-bucket-name> \
+      -filename <crawl-folder-name> \
+      -bloom <bloom filter name for this data> \
+      -image <True/False> \
+      -task <text-classification> \
+      -date <date-string> \
+      -bloom <bloom-filter-file> \
+```
+- For temporal analysis, set `-temporal True` and provide the appropriate folder structure.
+
+### 4. Output
+
+- Processed CSV files and images will be saved to your MinIO bucket or local disk, depending on your configuration.
+- Logs will indicate progress and any errors encountered.
+
+**Tip:**
+You can customize the pipeline by editing arguments in `main_disk.py` or by modifying the `ETLDiskJob` class for advanced workflows.
+
+### Command-line Arguments
+
+The ETL pipeline can be customized using the following command-line arguments:
+
+- `-finalbucket` (str, required):
+  The MinIO bucket to store processed data (e.g., `clf` or `elt`).
+
+- `-model` (str, optional):
+  Model name on Hugging Face for classification tasks.
+
+- `-bloom` (str, optional):
+  The MinIO bloom filter file name for deduplication.
+
+- `-task` (str, optional):
+  Task to perform. Choices: `text-classification`, `zero-shot-classification`.
+
+- `-image` (bool, optional):
+  Whether to download images (`True` or `False`).
+
+- `-filename` (str, optional):
+  Filename on disk or crawler ID for the crawled data repository
+
+- `-date` (str, optional):
+  The date string for the image bucket.
+
+- `-temporal` (bool, optional):
+  Whether to run the pipeline in temporal analysis mode (`True` or `False`).
+
+**Example usage:**
+```bash
+python main_disk.py -finalbucket wildlife-data \
+    -model vida-nyu/animal-product-detector \
+    -task text-classification \
+    -image True \
+    -date April \
+    -filename crawler_animal \
+    -bloom animal_filter \
+```
 

@@ -1,20 +1,38 @@
 from pybloom import ScalableBloomFilter
+import pickle
+import os
 
 
 class BloomFilter:
-    def __init__(self, minio_client, file_name):
+    def __init__(self, minio_client, file_name, local=False):
         self.minio = minio_client
         self.bloom_name = file_name
-        if minio_client.check_obj_exists("bloom-filter", file_name):
-            self.bloom = minio_client.get_bloom_filter(file_name)
+        self.local = local
+        if local:
+            if os.path.exists(file_name):
+                with open(file_name, "rb") as f:
+                    self.bloom = pickle.load(f)
+            else:
+                self.bloom = ScalableBloomFilter(mode=ScalableBloomFilter.SMALL_SET_GROWTH, error_rate=0.001)
         else:
-            self.bloom = ScalableBloomFilter(mode=ScalableBloomFilter.SMALL_SET_GROWTH, error_rate=0.001)
+            if minio_client.check_obj_exists("bloom-filter", file_name):
+                self.bloom = minio_client.get_bloom_filter(file_name)
+            else:
+                self.bloom = ScalableBloomFilter(mode=ScalableBloomFilter.SMALL_SET_GROWTH, error_rate=0.001)
 
     def save(self):
-        self.minio.save_bloom(self.bloom, self.bloom_name)
-    
+        if self.local:
+            with open(self.bloom_name, "wb") as f:
+                pickle.dump(self.bloom, f)
+        else:
+            self.minio.save_bloom(self.bloom, self.bloom_name)
+
     def load_bloom_filter(self):
-        self.bloom = self.minio.get_bloom_filter(self.bloom_name)
+        if self.local:
+            with open(self.bloom_name, "rb") as f:
+                self.bloom = pickle.load(f)
+        else:
+            self.bloom = self.minio.get_bloom_filter(self.bloom_name)
 
     def check_bloom_filter(self, text: str) -> bool:
         if self.bloom:

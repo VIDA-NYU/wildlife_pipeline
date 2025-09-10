@@ -24,14 +24,14 @@ geo_data = datamart_geo.GeoData.download(update=False)
 
 
 class ProcessData:
-    def __init__(self, bloom_filter, minio_client, bucket, task, column, model):
+    def __init__(self, bloom_filter, minio_client, bucket, task, model):  # REMOVE column from signature
         self.minio_client = minio_client
         self.bloom_filter = bloom_filter
         self.domains = {}
         self.bucket = bucket
         self.task = task
-        self.column = column
         self.model = model
+        # self.column = column  # REMOVE this line
 
     def open_scrap(self, minio_client: Any, domain: str):
         if domain not in self.domains.keys():

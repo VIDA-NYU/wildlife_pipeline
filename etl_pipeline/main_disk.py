@@ -14,8 +14,6 @@ def main():
     model = args.model
     filename = args.filename
     temporal = args.temporal
-
-    column = args.col
     task = args.task
     save_image = args.image
 
@@ -35,14 +33,14 @@ def main():
             path = f"/data/{file}/{filename}/data_pages/"
             folder_name = f"{filename}_{file}/"
             etl_job = ETLDiskJob(bucket=final_bucket, minio_client=minio_client, path=path, save_image=save_image,
-                                 task=task, column=column, model=model, bloom_filter=bloom)
+                                 task=task, model=model, bloom_filter=bloom)
             etl_job.run(folder_name=folder_name, date=date)
     else:
         print("Starting regular ETL Job from Disk")
         path = f"/data/{filename}/data_pages/"
         folder_name = ""
         etl_job = ETLDiskJob(bucket=final_bucket, minio_client=minio_client, path=path, save_image=save_image,
-                             task=task, column=column, model=model, bloom_filter=bloom, folder_name=folder_name)
+                             task=task, model=model, bloom_filter=bloom, folder_name=folder_name)
         etl_job.run(folder_name=folder_name, date=date)
 
     print("Job Completed")
@@ -61,8 +59,6 @@ def create_arg_parser():
     parser.add_argument('-task', type=str, required=False, choices=["text-classification", "zero-shot-classification", "both", "multi-model"],
                         help="Task to perform")
     parser.add_argument('-image', type=bool, required=False, help="Download image - True or False")
-    parser.add_argument('-col', type=str, required=False,
-                        help="The column on which you want to perform the inference for text-classification")
     parser.add_argument('-filename', type=str, required=False,
                         help="filename on disk - for temporal task, it is the crawler ID")
     parser.add_argument('-date', type=str, required=False, help="The date of image bucket")
