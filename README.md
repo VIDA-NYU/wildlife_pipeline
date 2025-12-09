@@ -1,15 +1,18 @@
 # Wildlife Pipeline
 
-This repository contains three projects for wildlife data processing and analysis:
+This repository contains the end-to-end pipeline we built to enable wildlife data collection, triage, and analysis which we developed in the context of 
+our NSF-funded project ["D-ISN: An Interdisciplinary Approach to the Discovery, Analysis, and Disruption of Wildlife Trafficking Networks"](https://vida-nyu.github.io/DISN-Wildlife-website). The components of the pipeline are described below.
 
-## Projects
+## Pipeline Components
 
+### 1. `Data Collection`
+Crawls online market places to retrieve ads.
 - **Features:**
     - Uses the [ACHE crawler](https://github.com/ViDA-NYU/ache) for web data collection
     - Configurable crawling parameters
     - Outputs raw data for ETL processing
 
-### 1. `ETL`
+### 2. `ETL`
 Handles the preprocessing (Extract, Transform, Load) of raw wildlife data from various sources collected using ACHE crawler.
 
 - **Features:**
@@ -17,7 +20,7 @@ Handles the preprocessing (Extract, Transform, Load) of raw wildlife data from v
     - Data cleaning and normalization
     - Output in standardized formats
 
-### 2. `Automated Classifier Generator (LTS)`
+### 3. `Automated Classifier Generator (LTS)`
 This module implements the Learn to Sample (LTS) - automated classifier generation pipeline for wildlife trafficking detection.
 
 - **Features:**
@@ -29,7 +32,7 @@ This module implements the Learn to Sample (LTS) - automated classifier generati
 
 **See the [`LTS`](https://github.com/VIDA-NYU/LTS) folder for code, documentation, and use-case data.**
 
-### 3. `HILTS`
+### 4. `HILTS`
 A web-based labeling and search platform for wildlife data, built with Svelte, TypeScript, and Python.
 Located in the [`hilts`](https://github.com/VIDA-NYU/HILTS) folder.
 
