@@ -27,7 +27,7 @@ This module implements the Learn to Sample (LTS) - automated classifier generati
     - Integration with validation and use-case datasets
     - Reproducible experiments for classifier training and evaluation
 
-**See the [`LTS`](wildlife_pipeline/LTS) folder for code, documentation, and use-case data.**
+**See the [`LTS`]([wildlife_pipeline/LTS](https://github.com/VIDA-NYU/LTS)) folder for code, documentation, and use-case data.**
 
 ### 3. `HILTS`
 A web-based labeling and search platform for wildlife data, built with Svelte, TypeScript, and Python.
