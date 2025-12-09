@@ -21,17 +21,17 @@ Handles the preprocessing (Extract, Transform, Load) of raw wildlife data from v
 This module implements the Learn to Sample (LTS) - automated classifier generation pipeline for wildlife trafficking detection.
 
 - **Features:**
-    - Implements cost-effective sampling and labeling strategies using LLMs (see [LTS](wildlife_pipeline/LTS))
+    - Implements cost-effective sampling and labeling strategies using LLMs (see [LTS](https://github.com/VIDA-NYU/LTS))
     - Fine-tuning and evaluation of text classifiers (BERT, GPT, LLaMA, etc.)
     - Topic modeling and clustering for data triage
     - Integration with validation and use-case datasets
     - Reproducible experiments for classifier training and evaluation
 
-**See the [`LTS`]([wildlife_pipeline/LTS](https://github.com/VIDA-NYU/LTS)) folder for code, documentation, and use-case data.**
+**See the [`LTS`](https://github.com/VIDA-NYU/LTS) folder for code, documentation, and use-case data.**
 
 ### 3. `HILTS`
 A web-based labeling and search platform for wildlife data, built with Svelte, TypeScript, and Python.
-Located in the [`hilts`](wildlife_pipeline/hilts) folder.
+Located in the [`hilts`](https://github.com/VIDA-NYU/HILTS) folder.
 
 - **Features:**
     - Interactive CSV data loading and labeling interface
@@ -41,7 +41,7 @@ Located in the [`hilts`](wildlife_pipeline/hilts) folder.
     - Dockerized deployment and Poetry-based Python environment
     - Example client built with Svelte + Vite
 
-**See the [`hilts`](wildlife_pipeline/hilts) folder for code, frontend, backend, and deployment instructions.**
+**See the [`hilts`](https://github.com/VIDA-NYU/HILTS) folder for code, frontend, backend, and deployment instructions.**
 
 ## Getting Started
 
